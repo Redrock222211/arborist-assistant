@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "512062345870",
+    "project_id": "arborist-assistant",
+    "storage_bucket": "arborist-assistant.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:512062345870:android:3555f403e8d596f177afdf",
+        "android_client_info": {
+          "package_name": "com.example.arborist_assistant"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "512062345870-1tg063qvn9f2hu9h2c9gss3vmn6v0bsb.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAKfzb5WiOMuRsFmuxlHS8c4q7Ufv1ufIU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "512062345870-1tg063qvn9f2hu9h2c9gss3vmn6v0bsb.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
