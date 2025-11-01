@@ -8,6 +8,7 @@ import '../services/site_storage_service.dart';
 import '../services/tree_storage_service.dart';
 import '../services/site_file_service.dart';
 import '../services/planning_ai_service.dart';
+import '../services/firebase_service.dart';
 import '../models/site.dart';
 import '../config/ai_config.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -195,6 +196,8 @@ class _SettingsPageState extends State<SettingsPage> {
           _buildAIConfigSection(),
           const SizedBox(height: 16),
           _buildBackupSection(),
+          const SizedBox(height: 16),
+          _buildCloudSyncSection(),
           const SizedBox(height: 16),
           _buildDataSection(),
         ],
@@ -629,6 +632,103 @@ class _SettingsPageState extends State<SettingsPage> {
           NotificationService.showError(context, 'Failed to delete site: $e');
         }
       }
+    }
+  }
+
+  Widget _buildCloudSyncSection() {
+    final isOnline = FirebaseService.isOnline;
+    final user = FirebaseService.currentUser;
+    
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.cloud_upload, color: Colors.green.shade600),
+                const SizedBox(width: 8),
+                const Text(
+                  'Cloud Sync',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Icon(
+                  isOnline ? Icons.cloud_done : Icons.cloud_off,
+                  color: isOnline ? Colors.green : Colors.grey,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              user != null 
+                ? 'Upload your existing data to cloud. New data syncs automatically.'
+                : 'Sign in to sync your data across devices.',
+              style: const TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 16),
+            if (user != null) ...[
+              ElevatedButton.icon(
+                onPressed: isOnline ? _syncToCloud : null,
+                icon: const Icon(Icons.cloud_upload),
+                label: const Text('Sync All Data to Cloud'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  minimumSize: const Size(double.infinity, 48),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Email: ${user.email}',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+              if (!isOnline)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    '⚠️ Offline - Connect to internet to sync',
+                    style: TextStyle(fontSize: 12, color: Colors.orange[700]),
+                  ),
+                ),
+            ] else ...[
+              Text(
+                '⚠️ Not signed in',
+                style: TextStyle(fontSize: 12, color: Colors.orange[700]),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _syncToCloud() async {
+    try {
+      NotificationService.showLoadingDialog(context, 'Syncing to cloud...');
+      
+      // Get all local sites
+      final sites = SiteStorageService.getAllSites();
+      
+      // Upload each site
+      for (final site in sites) {
+        await FirebaseService.saveSite(site);
+        
+        // Get and upload all trees for this site
+        final trees = TreeStorageService.getTreesForSite(site.id);
+        for (final tree in trees) {
+          await FirebaseService.saveTree(tree);
+        }
+      }
+      
+      Navigator.of(context).pop(); // Close loading dialog
+      NotificationService.showSuccess(
+        context, 
+        'Synced ${sites.length} sites and ${sites.fold<int>(0, (sum, site) => sum + TreeStorageService.getTreesForSite(site.id).length)} trees to cloud!'
+      );
+    } catch (e) {
+      Navigator.of(context).pop(); // Close loading dialog
+      NotificationService.showError(context, 'Sync failed: $e');
     }
   }
 }

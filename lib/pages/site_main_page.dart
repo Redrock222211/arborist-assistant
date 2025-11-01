@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:arborist_assistant/models/site.dart';
+import 'dart:typed_data';import 'package:arborist_assistant/models/site.dart';
 import 'package:arborist_assistant/models/tree_entry.dart';
 import 'package:arborist_assistant/services/app_state_service.dart';
 import 'package:arborist_assistant/services/site_storage_service.dart';
@@ -15,7 +15,7 @@ import 'package:arborist_assistant/services/vicplan_service.dart';
 import 'package:arborist_assistant/services/regulatory_data_service.dart';
 import 'package:arborist_assistant/models/lga_tree_law.dart';
 import 'package:arborist_assistant/models/overlay_tree_requirement.dart';
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
 
 class SiteMainPage extends StatefulWidget {
   final Site site;
@@ -335,7 +335,7 @@ class _SiteMainPageState extends State<SiteMainPage> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    padding: const EdgeInsets.all(16),
                   ),
                 ),
               ),
@@ -576,7 +576,7 @@ class _SiteDetailsPageState extends State<SiteDetailsPage> {
                     if (_treeLaw!.localLawsPageUrl.isNotEmpty) ...[
                       const SizedBox(height: 12),
                       TextButton.icon(
-                        onPressed: () => html.window.open(_treeLaw!.localLawsPageUrl, '_blank'),
+                        onPressed: () async => await openUrlInBrowser(_treeLaw!.localLawsPageUrl),
                         icon: const Icon(Icons.open_in_new),
                         label: const Text('View Council Website'),
                         style: TextButton.styleFrom(
@@ -1185,14 +1185,9 @@ class _SiteDetailsPageState extends State<SiteDetailsPage> {
     );
   }
 
-  void _downloadAsText(BuildContext context, String content) {
+  void _downloadAsText(BuildContext context, String content) async {
     // For web, create a downloadable text file
-    final blob = html.Blob([content], 'text/plain');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    final anchor = html.AnchorElement(href: url)
-      ..setAttribute('download', '${widget.site.name}_Site_Details.txt')
-      ..click();
-    html.Url.revokeObjectUrl(url);
+    await downloadFile(Uint8List.fromList(content.codeUnits), 'export.file', 'text/plain');
     
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Site details downloaded!')),

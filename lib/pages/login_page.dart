@@ -24,10 +24,6 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void initState() {
     super.initState();
-    // Set default admin credentials for demo
-    _emailController.text = 'admin@arborist.com';
-    _passwordController.text = 'admin123';
-    
     // Check connectivity status
     _checkConnectivity();
   }
@@ -347,19 +343,6 @@ class _LoginPageState extends State<LoginPage> {
                                 : 'Don\'t have an account? Register',
                           ),
                         ),
-                        
-                        if (!_isRegistering) ...[
-                          const SizedBox(height: 16),
-                          const Text(
-                            'Demo Credentials:',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
-                          ),
-                          const Text(
-                            'Email: admin@arborist.com\nPassword: admin123',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
                       ],
                     ),
                   ),

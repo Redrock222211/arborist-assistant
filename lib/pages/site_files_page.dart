@@ -10,7 +10,7 @@ import '../services/tree_storage_service.dart';
 import 'package:intl/intl.dart';
 import 'package:csv/csv.dart';
 import 'dart:convert';
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
 
 class SiteFilesPage extends StatefulWidget {
   final Site site;
@@ -141,12 +141,7 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
     try {
       // For web, create a downloadable file
       final bytes = utf8.encode(_csvData);
-      final blob = html.Blob([bytes], 'text/csv');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', '${widget.site.name}_Trees_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv')
-        ..click();
-      html.Url.revokeObjectUrl(url);
+      await downloadFile(bytes, 'export.file', 'text/csv');
       
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('CSV downloaded successfully!')),

@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -455,15 +455,9 @@ class EnhancedExportService {
   }
 
   /// Download text content as a file in web browser
-  static void _downloadTextAsFile(String content, String fileName) {
+  static void _downloadTextAsFile(String content, String fileName) async {
     if (kIsWeb) {
       final bytes = utf8.encode(content);
-      final blob = html.Blob([bytes]);
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', fileName)
-        ..click();
-      html.Url.revokeObjectUrl(url);
-    }
+      await downloadFile(bytes, "export.pdf", "application/pdf");    }
   }
 }

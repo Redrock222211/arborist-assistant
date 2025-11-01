@@ -1,7 +1,7 @@
 import 'dart:ui' as ui;
 import 'dart:typed_data';
 import 'dart:io';
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
@@ -41,7 +41,7 @@ class MapExportService {
           initialCenter: LatLng(centerLat, centerLng),
           initialZoom: _defaultZoom,
           interactionOptions: const InteractionOptions(
-            enableScrollWheel: false,
+            scrollWheelVelocity: 0.0,
             enableMultiFingerGestureRace: false,
           ),
         ),
@@ -118,7 +118,7 @@ class MapExportService {
           initialCenter: LatLng(tree.latitude, tree.longitude),
           initialZoom: _defaultZoom + 2, // Closer zoom for single tree
           interactionOptions: const InteractionOptions(
-            enableScrollWheel: false,
+            scrollWheelVelocity: 0.0,
             enableMultiFingerGestureRace: false,
           ),
         ),
@@ -352,16 +352,10 @@ class MapExportService {
   }
 
   /// Download bytes as a file in web browser
-  static void _downloadBytes(Uint8List bytes, String fileName) {
+  static void _downloadBytes(Uint8List bytes, String fileName) async {
     if (kIsWeb) {
       // For web, we'll use a simple approach to trigger download
       // This creates a temporary link and clicks it
-      final blob = html.Blob([bytes]);
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', fileName)
-        ..click();
-      html.Url.revokeObjectUrl(url);
-    }
+      await downloadFile(bytes, "map.png", "image/png");    }
   }
 }

@@ -5,7 +5,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
 
 import '../models/site.dart';
 import '../services/site_storage_service.dart';
@@ -745,7 +745,7 @@ class _SimpleWorkingDialogState extends State<SimpleWorkingDialog> {
                                   child: Column(
                                     children: [
                                       InkWell(
-                                        onTap: () {
+                                        onTap: () async {
                                           setState(() {
                                             _showAIExplanation = !_showAIExplanation;
                                           });
@@ -844,10 +844,10 @@ class _SimpleWorkingDialogState extends State<SimpleWorkingDialog> {
                                                     overflow: TextOverflow.visible,
                                                   )
                                                 : GestureDetector(
-                                                    onTap: () {
+                                                    onTap: () async {
                                                       if (kIsWeb) {
                                                         // ignore: undefined_prefixed_name
-                                                        html.window.open('https://www.planning.vic.gov.au/planning-schemes/zones', '_blank');
+                                                        await openUrlInBrowser('https://www.planning.vic.gov.au/planning-schemes/zones');
                                                       }
                                                     },
                                                     child: Row(
@@ -930,10 +930,10 @@ class _SimpleWorkingDialogState extends State<SimpleWorkingDialog> {
                                                     overflow: TextOverflow.visible,
                                                   )
                                                 : GestureDetector(
-                                                    onTap: () {
+                                                    onTap: () async {
                                                       if (kIsWeb) {
                                                         // ignore: undefined_prefixed_name
-                                                        html.window.open('https://www.planning.vic.gov.au/planning-schemes/overlays', '_blank');
+                                                        await openUrlInBrowser('https://www.planning.vic.gov.au/planning-schemes/overlays');
                                                       }
                                                     },
                                                     child: Row(

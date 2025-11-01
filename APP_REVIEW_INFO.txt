@@ -1,0 +1,46 @@
+====================================
+APP REVIEW INFORMATION - COPY THIS
+====================================
+
+Sign-in Information (on the page you're on now):
+------------------------------------------------
+
+☑ Sign-in required
+
+User name: sun@moon.com
+Password: sunmoon
+
+Notes:
+This test account has full access without requiring subscription.
+
+
+Contact Information:
+-------------------
+First name: [YOUR FIRST NAME]
+Last name: [YOUR LAST NAME]
+Phone number: [YOUR PHONE]
+Email: hello@arboristsbynature.com.au
+
+
+Notes for Reviewer:
+------------------
+This is a professional tree management application for arborists in Victoria, Australia.
+
+TEST ACCOUNT:
+Email: sun@moon.com
+Password: sunmoon
+
+This account has full access without subscription for testing purposes.
+
+KEY FEATURES TO TEST:
+1. Create a site (use any Australian address, e.g., "123 Collins St, Melbourne VIC")
+2. Add a tree with basic assessment data
+3. View the interactive map
+4. Export to PDF
+5. Use the permit lookup tool (search any Melbourne address)
+
+The app integrates with Victorian government planning data (VICMAP) and provides instant permit requirements for tree work across 76 Victorian councils.
+
+All data is stored locally and synced to Firebase cloud storage. The app works fully offline.
+
+====================================

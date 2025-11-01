@@ -1,6 +1,7 @@
 import 'package:hive/hive.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/site.dart';
+import 'firebase_service.dart';
 
 class SiteStorageService {
   static const String boxName = 'sites';
@@ -14,8 +15,20 @@ class SiteStorageService {
   }
 
   static Future<void> addSite(Site site) async {
+    // Save to local storage
     final box = Hive.box<Site>(boxName);
     await box.put(site.id, site);
+    
+    // Sync to Firebase if online
+    try {
+      if (FirebaseService.isOnline && FirebaseService.currentUser != null) {
+        await FirebaseService.saveSite(site);
+        print('✅ Site synced to cloud: ${site.name}');
+      }
+    } catch (e) {
+      print('⚠️ Failed to sync site to cloud: $e');
+      // Continue anyway - data is saved locally
+    }
   }
 
   static List<Site> getAllSites() {
@@ -37,7 +50,19 @@ class SiteStorageService {
   }
 
   static Future<void> updateSite(String id, Site site) async {
+    // Update local storage
     final box = Hive.box<Site>(boxName);
     await box.put(id, site);
+    
+    // Sync to Firebase if online
+    try {
+      if (FirebaseService.isOnline && FirebaseService.currentUser != null) {
+        await FirebaseService.saveSite(site);
+        print('✅ Site updated in cloud: ${site.name}');
+      }
+    } catch (e) {
+      print('⚠️ Failed to sync site update to cloud: $e');
+      // Continue anyway - data is saved locally
+    }
   }
 }

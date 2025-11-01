@@ -26,6 +26,7 @@ import 'services/firebase_service.dart';
 import 'services/site_file_service.dart';
 import 'services/drawing_storage_service.dart';
 import 'services/planning_ai_service.dart';
+import 'services/subscription_service.dart';
 // Removed unused import
 import 'widgets/app_logo.dart';
 import 'models/site.dart';
@@ -71,6 +72,9 @@ void main() async {
   await FirebaseService.init();
   await SiteFileService.init();
   await DrawingStorageService.init();
+  
+  // Initialize subscription service
+  await SubscriptionService.initialize();
   
   // Initialize Hive boxes for app settings
   await Hive.openBox('app_settings');

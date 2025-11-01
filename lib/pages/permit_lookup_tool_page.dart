@@ -5,7 +5,7 @@ import '../services/web_geocoding_service.dart';
 import '../models/lga_tree_law.dart';
 import '../models/overlay_tree_requirement.dart';
 import 'dart:convert';
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -294,12 +294,7 @@ class _PermitLookupToolPageState extends State<PermitLookupToolPage> {
       final filename = 'permit_requirements_${DateTime.now().millisecondsSinceEpoch}.pdf';
       
       // Download
-      final blob = html.Blob([bytes], 'application/pdf');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', filename)
-        ..click();
-      html.Url.revokeObjectUrl(url);
+      await downloadFile(bytes, 'export.file', 'application/pdf');
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('✅ Exported to $filename')),
@@ -311,7 +306,7 @@ class _PermitLookupToolPageState extends State<PermitLookupToolPage> {
     }
   }
 
-  void _exportToWord() {
+  Future<void> _exportToWord() async {
     if (_treeLaw == null && _overlayRequirements.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No data to export')),
@@ -388,12 +383,7 @@ class _PermitLookupToolPageState extends State<PermitLookupToolPage> {
     
     // Download
     final bytes = utf8.encode(htmlString);
-    final blob = html.Blob([bytes], 'application/msword');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    final anchor = html.AnchorElement(href: url)
-      ..setAttribute('download', filename)
-      ..click();
-    html.Url.revokeObjectUrl(url);
+    await downloadFile(bytes, 'export.file', 'application/msword');
     
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Exported to $filename')),
@@ -683,8 +673,8 @@ class _PermitLookupToolPageState extends State<PermitLookupToolPage> {
               if (law.localLawsPageUrl.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 TextButton.icon(
-                  onPressed: () {
-                    html.window.open(law.localLawsPageUrl, '_blank');
+                  onPressed: () async {
+                    await openUrlInBrowser(law.localLawsPageUrl);
                   },
                   icon: const Icon(Icons.open_in_new),
                   label: const Text('View Council Information'),

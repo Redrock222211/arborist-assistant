@@ -91,8 +91,8 @@ class _MapPageState extends State<MapPage> {
     _mapMoveSub = _mapController.mapEventStream.listen((event) {
       if (event is MapEventMoveEnd) {
         try {
-          final center = _mapController.center;
-          final zoom = _mapController.zoom;
+          final center = _mapController.camera.center;
+          final zoom = _mapController.camera.zoom;
           AppStateService.saveMapPosition(center, zoom);
         } catch (_) {}
       }
@@ -1356,8 +1356,8 @@ class _MapPageState extends State<MapPage> {
                   key: ValueKey('map_$_mapRefreshCounter'),
                   mapController: _mapController,
                   options: MapOptions(
-                    center: _center,
-                    zoom: _zoom,
+                    initialCenter: _center,
+                    initialZoom: _zoom,
                     onMapReady: () {
                       setState(() {
                         _mapReady = true;

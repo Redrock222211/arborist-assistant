@@ -4,7 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:convert';
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
 import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
 import 'package:pdf/pdf.dart';
@@ -710,12 +710,7 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
       print('📊 Map image captured: ${pngBytes.length} bytes, Size: ${image.width}x${image.height}');
       
       // Download as PNG
-      final blob = html.Blob([pngBytes], 'image/png');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', filename)
-        ..click();
-      html.Url.revokeObjectUrl(url);
+      await downloadFile(pngBytes, 'export.file', 'image/png');
       print('✅ Image downloaded');
       
       // Save to Files tab
@@ -1365,12 +1360,7 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
       print('📊 PDF generated: ${bytes.length} bytes');
       
       // Download file
-      final blob = html.Blob([bytes], 'application/pdf');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', filename)
-        ..click();
-      html.Url.revokeObjectUrl(url);
+      await downloadFile(bytes, 'export.file', 'application/pdf');
       print('✅ PDF downloaded');
       
       // Save to Files tab
@@ -2194,15 +2184,9 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
     return cells;
   }
 
-  void _downloadFile(String filename, String content, String mimeType) {
+  void _downloadFile(String filename, String content, String mimeType) async {
     final bytes = utf8.encode(content);
-    final blob = html.Blob([bytes], mimeType);
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    final anchor = html.AnchorElement(href: url)
-      ..setAttribute('download', filename)
-      ..click();
-    html.Url.revokeObjectUrl(url);
-  }
+    await downloadFile(bytes, "export", mimeType);  }
 
   void _showMoreOptions() {
     showDialog(
