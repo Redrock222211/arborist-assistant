@@ -71,10 +71,24 @@ class AuthService {
       
       if (localUser == null) {
         // Create new local user from Firebase user
+        // Use displayName if available, otherwise extract name from email
+        String userName = firebaseUser.displayName ?? '';
+        if (userName.isEmpty && firebaseUser.email != null) {
+          // Extract username from email (part before @)
+          userName = firebaseUser.email!.split('@').first;
+          // Capitalize first letter
+          if (userName.isNotEmpty) {
+            userName = userName[0].toUpperCase() + userName.substring(1);
+          }
+        }
+        if (userName.isEmpty) {
+          userName = 'Arborist';
+        }
+        
         localUser = app_user.User(
           id: firebaseUser.uid,
           email: firebaseUser.email ?? '',
-          name: firebaseUser.displayName ?? 'Firebase User',
+          name: userName,
           role: 'arborist',
           createdAt: DateTime.now(),
           permissions: _getDefaultPermissions('arborist'),

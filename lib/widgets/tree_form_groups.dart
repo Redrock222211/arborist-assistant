@@ -11,8 +11,9 @@ class TreeFormGroups {
     required Function(String, bool) onGroupToggle,
     required Function(String) onExpandToggle,
     required Map<String, List<Widget>> groupContent,
+    List<String>? relevantGroups, // Optional filter for report-specific groups
   }) {
-    return [
+    final allGroups = [
       // GROUP 1: Photos & Documentation
       CollapsibleFormSection(
         title: 'Photos & Documentation',
@@ -273,5 +274,25 @@ class TreeFormGroups {
         children: groupContent['inspector_details'] ?? [Text('Add inspector details here')],
       ),
     ];
+    
+    // Filter groups based on relevantGroups if provided
+    if (relevantGroups != null && relevantGroups.isNotEmpty) {
+      final groupKeys = [
+        'photos', 'voice_notes', 'location', 'basic_data', 'health', 'structure',
+        'vta', 'qtra', 'isa_risk', 'protection_zones', 'impact_assessment',
+        'development', 'retention_removal', 'management', 'valuation', 'ecological',
+        'regulatory', 'monitoring', 'diagnostics', 'inspector_details'
+      ];
+      
+      return allGroups.where((widget) {
+        final index = allGroups.indexOf(widget);
+        if (index >= 0 && index < groupKeys.length) {
+          return relevantGroups.contains(groupKeys[index]);
+        }
+        return true;
+      }).toList();
+    }
+    
+    return allGroups;
   }
 }

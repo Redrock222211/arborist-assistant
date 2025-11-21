@@ -1,19 +1,25 @@
+import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'dart:ui' as ui;
 import 'package:flutter_map/flutter_map.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
-import 'dart:convert';
-import 'dart:html' as html;
-import 'dart:typed_data';
-import 'package:uuid/uuid.dart';
+import 'package:geolocator/geolocator.dart';
+import 'dart:math' as math;
+import '../services/tree_csv_exporter.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:uuid/uuid.dart';
+
 import '../models/site.dart';
-import '../models/tree_entry.dart';
 import '../models/site_file.dart';
-import '../services/tree_storage_service.dart';
+import '../models/tree_entry.dart';
 import '../services/site_file_service.dart';
+import '../services/tree_storage_service.dart';
+import '../utils/platform_download.dart';
 
 /// Professional tree layout map for reports
 /// Shows all trees with different visual styles for export
@@ -28,9 +34,11 @@ class TreeLayoutMapPage extends StatefulWidget {
 
 class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
   final MapController _mapController = MapController();
-  final GlobalKey _mapKey = GlobalKey();
+  final GlobalKey _mapKey = GlobalKey(debugLabel: 'treeLayoutMap');
   List<TreeEntry> _trees = [];
   bool _isLoading = true;
+  LatLng? _lastCenter;
+  double? _lastZoom;
   
   // Map style options
   String _selectedStyle = 'satellite'; // satellite, street, hybrid
@@ -49,6 +57,11 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
   @override
   void initState() {
     super.initState();
+    _lastCenter = LatLng(
+      widget.site.latitude ?? -37.8136,
+      widget.site.longitude ?? 144.9631,
+    );
+    _lastZoom = 19.0;
     _loadTrees();
   }
 
@@ -62,167 +75,366 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
 
   @override
   Widget build(BuildContext context) {
+    final layout = MediaQuery.of(context);
+    final showSidebar = layout.size.width > 1100;
+
+    if (_isLoading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     return Scaffold(
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
+      appBar: AppBar(
+        title: Text('Site Map - ${widget.site.name}'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf),
+            tooltip: 'Export Site Map',
+            onPressed: _exportAsPDF,
+          ),
+          IconButton(
+            icon: const Icon(Icons.image_outlined),
+            tooltip: 'Export as image',
+            onPressed: _exportAsImage,
+          ),
+          IconButton(
+            icon: const Icon(Icons.table_chart),
+            tooltip: 'Download tree data CSV',
+            onPressed: _exportTreeDataCSV,
+          ),
+        ],
+      ),
+      body: Row(
+        children: [
+          SizedBox(
+            width: showSidebar ? 280 : 240,
+            child: _buildControlPanel(),
+          ),
+          Expanded(
+            child: Stack(
               children: [
-                _buildToolbar(),
-                Expanded(child: _buildMap()),
-                _buildLegend(),
+                Positioned.fill(
+                  child: RepaintBoundary(
+                    key: _mapKey,
+                    child: FlutterMap(
+                      mapController: _mapController,
+                      options: MapOptions(
+                        initialCenter: _lastCenter!,
+                        initialZoom: _lastZoom!,
+                        maxZoom: 22.0,
+                        minZoom: 14.0,
+                        onMapEvent: (event) {
+                          try {
+                            final camera = _mapController.camera;
+                            setState(() {
+                              _lastCenter = camera.center;
+                              _lastZoom = camera.zoom;
+                            });
+                          } catch (_) {
+                            // Map controller not yet ready; ignore.
+                          }
+                        },
+                      ),
+                      children: _buildMapLayers(),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 16,
+                  left: 16,
+                  child: _buildMapBadge(),
+                ),
+                if (_showScaleBar)
+                  Positioned(
+                    bottom: 24,
+                    left: 24,
+                    child: _ScaleBar(),
+                  ),
+                if (_showNorthArrow)
+                  Positioned(
+                    bottom: 24,
+                    right: 24,
+                    child: _NorthArrow(),
+                  ),
               ],
             ),
+          ),
+          if (showSidebar)
+            SizedBox(
+              width: 320,
+              child: _buildInsightsPanel(),
+            ),
+        ],
+      ),
+      bottomNavigationBar: showSidebar ? null : SizedBox(height: 220, child: _buildInsightsPanel()),
     );
   }
 
-  Widget _buildToolbar() {
+  Widget _ScaleBar() {
     return Container(
-      padding: const EdgeInsets.all(8),
-      color: Colors.white,
-      child: Column(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(999),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 6,
+            offset: Offset(0, 3),
+          ),
+        ],
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // Row 1: Map styles and basic toggles
-          Row(
+          _ScaleTick(label: '0m'),
+          const SizedBox(width: 12),
+          const SizedBox(
+            width: 48,
+            child: Divider(
+              thickness: 2,
+              color: Colors.black54,
+            ),
+          ),
+          const SizedBox(width: 12),
+          _ScaleTick(label: '10m'),
+        ],
+      ),
+    );
+  }
+
+  Widget _NorthArrow() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.9),
+        shape: BoxShape.circle,
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 6,
+            offset: Offset(0, 3),
+          ),
+        ],
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          Text(
+            'N',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Icon(
+            Icons.navigation,
+            size: 24,
+            color: Colors.black87,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _ScaleTick({required String label}) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 2,
+          height: 12,
+          color: Colors.black54,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildControlPanel() {
+    return Material(
+      color: Colors.grey.shade50,
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Map style selector
-              _buildStyleButton('Satellite', 'satellite', Icons.satellite),
-              const SizedBox(width: 8),
-              _buildStyleButton('Street', 'street', Icons.map),
-              const SizedBox(width: 8),
-              _buildStyleButton('Hybrid', 'hybrid', Icons.layers),
-              const SizedBox(width: 16),
-              
-              // Toggle options
-              _buildToggleButton('Labels', _showTreeLabels, Icons.label, () {
-                setState(() => _showTreeLabels = !_showTreeLabels);
-              }),
-              const SizedBox(width: 8),
-              _buildToggleButton('TPZ', _showProtectionZones, Icons.circle_outlined, () {
-                setState(() => _showProtectionZones = !_showProtectionZones);
-              }),
-              const SizedBox(width: 8),
-              _buildToggleButton('SRZ', _showSRZ, Icons.radar, () {
-                setState(() => _showSRZ = !_showSRZ);
-              }),
-              const SizedBox(width: 8),
-              _buildToggleButton('Canopy', _showCanopyCircles, Icons.forest, () {
-                setState(() => _showCanopyCircles = !_showCanopyCircles);
-              }),
-              const SizedBox(width: 8),
-              _buildToggleButton('Grid', _showGrid, Icons.grid_on, () {
-                setState(() => _showGrid = !_showGrid);
-              }),
-              
-              const Spacer(),
-              
-              // More options button
-              IconButton(
-                onPressed: _showMoreOptions,
-                icon: const Icon(Icons.settings),
-                tooltip: 'More Options',
+              const Text('Base Map', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _styleChip('Satellite', 'satellite', Icons.satellite_alt),
+                  _styleChip('Street', 'street', Icons.map),
+                  _styleChip('Hybrid', 'hybrid', Icons.layers),
+                ],
               ),
-              
-              // Export Map Image button
+              const SizedBox(height: 24),
+              const Text('Layers', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 12),
+              _layerSwitch('Show Tree Labels', _showTreeLabels, (value) => setState(() => _showTreeLabels = value)),
+              _layerSwitch('Tree Protection Zone (TPZ)', _showProtectionZones, (value) => setState(() => _showProtectionZones = value)),
+              _layerSwitch('Structural Root Zone (SRZ)', _showSRZ, (value) => setState(() => _showSRZ = value)),
+              _layerSwitch('Canopy Spread', _showCanopyCircles, (value) => setState(() => _showCanopyCircles = value)),
+              _layerSwitch('Tree Numbers', _showTreeNumbers, (value) => setState(() => _showTreeNumbers = value)),
+              const SizedBox(height: 24),
+              const Text('Map Appearance', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Marker size'),
+                subtitle: Slider(
+                  value: _treeMarkerSize,
+                  min: 24,
+                  max: 60,
+                  divisions: 6,
+                  label: _treeMarkerSize.round().toString(),
+                  onChanged: (value) => setState(() => _treeMarkerSize = value),
+                ),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Map brightness'),
+                subtitle: Slider(
+                  value: _mapOpacity,
+                  min: 0.4,
+                  max: 1.0,
+                  divisions: 6,
+                  label: '${(_mapOpacity * 100).round()}%',
+                  onChanged: (value) => setState(() => _mapOpacity = value),
+                ),
+              ),
+              _layerSwitch('Grid overlay', _showGrid, (value) => setState(() => _showGrid = value)),
+              _layerSwitch('Scale bar', _showScaleBar, (value) => setState(() => _showScaleBar = value)),
+              _layerSwitch('North arrow', _showNorthArrow, (value) => setState(() => _showNorthArrow = value)),
+              const Divider(height: 32),
+              const Text('Colour scheme', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: _colorScheme,
+                decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true),
+                items: const [
+                  DropdownMenuItem(value: 'condition', child: Text('Tree condition')),
+                  DropdownMenuItem(value: 'species', child: Text('Species family')),
+                  DropdownMenuItem(value: 'health', child: Text('Health/vigor')),
+                  DropdownMenuItem(value: 'priority', child: Text('Risk priority')),
+                ],
+                onChanged: (value) => setState(() => _colorScheme = value ?? 'condition'),
+              ),
+              const SizedBox(height: 24),
               ElevatedButton.icon(
-                onPressed: () {
-                  print('🔘 EXPORT MAP IMAGE BUTTON CLICKED!');
-                  _exportAsImage();
-                },
-                icon: const Icon(Icons.image),
-                label: const Text('Map Image'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                  foregroundColor: Colors.white,
-                ),
+                onPressed: _fitAllTrees,
+                icon: const Icon(Icons.zoom_out_map),
+                label: const Text('Fit all trees'),
               ),
-              const SizedBox(width: 8),
-              // Export PDF Report button
-              Tooltip(
-                message: '📄 Professional PDF reports for clients and compliance',
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    print('🔘 EXPORT PDF BUTTON CLICKED!');
-                    _exportAsPDF();
-                  },
-                  icon: const Icon(Icons.picture_as_pdf),
-                  label: const Text('PDF Report'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red[700],
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Export CSV button
-              Tooltip(
-                message: '📊 Spreadsheet data for analysis in Excel/Google Sheets',
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    print('🔘 EXPORT CSV BUTTON CLICKED!');
-                    _exportTreeDataCSV();
-                  },
-                  icon: const Icon(Icons.table_chart),
-                  label: const Text('CSV'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Export Word button
-              Tooltip(
-                message: '📝 Editable Word documents for customization',
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    print('🔘 EXPORT WORD BUTTON CLICKED!');
-                    _exportAsWord();
-                  },
-                  icon: const Icon(Icons.description),
-                  label: const Text('Word'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue[800],
-                    foregroundColor: Colors.white,
-                  ),
-                ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _resetView,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Reset view'),
               ),
             ],
           ),
-          
-          const SizedBox(height: 8),
-          
-          // Row 2: Color scheme and tree count only (moved sliders to More Options)
-          Row(
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMapBadge() {
+    return Card(
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _selectedStyle == 'satellite'
+                  ? 'Base map: Satellite imagery'
+                  : _selectedStyle == 'street'
+                      ? 'Base map: Street map'
+                      : 'Base map: Hybrid',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            if (_lastCenter != null)
+              Text(
+                'Center: '
+                '${(_lastCenter!.latitude).toStringAsFixed(5)}, '
+                '${(_lastCenter!.longitude).toStringAsFixed(5)}',
+              ),
+            if (_lastZoom != null)
+              Text('Zoom: ${_lastZoom!.toStringAsFixed(1)}'),
+            const SizedBox(height: 4),
+            Text('${_trees.length} trees loaded'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInsightsPanel() {
+    final totalTrees = _trees.length;
+    final labelled = _trees.where((t) => t.species?.isNotEmpty ?? false).length;
+    final highRisk = _trees.where((t) => (t.riskRating ?? '').toLowerCase().contains('high')).length;
+
+    return Material(
+      color: Colors.white,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Site overview', style: TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text(widget.site.address ?? 'Address not provided'),
+            trailing: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(DateFormat('d MMM yyyy').format(DateTime.now())),
+                Text('Prepared for: ${widget.site.name}'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              const Text('Color by:', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(width: 8),
-              DropdownButton<String>(
-                value: _colorScheme,
-                items: const [
-                  DropdownMenuItem(value: 'condition', child: Text('Condition')),
-                  DropdownMenuItem(value: 'species', child: Text('Species')),
-                  DropdownMenuItem(value: 'health', child: Text('Health')),
-                  DropdownMenuItem(value: 'priority', child: Text('Risk')),
-                ],
-                onChanged: (value) => setState(() => _colorScheme = value!),
-              ),
-              
-              const Spacer(),
-              
-              // Tree count
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.green.shade50,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.green.shade200),
-                ),
-                child: Text(
-                  '${_trees.length} trees',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
+              _insightChip(Icons.forest, 'Total trees', totalTrees.toString()),
+              _insightChip(Icons.local_florist, 'Identified species', labelled.toString()),
+              _insightChip(Icons.warning_amber, 'High risk flags', highRisk.toString()),
             ],
+          ),
+          const SizedBox(height: 24),
+          ExpansionTile(
+            initiallyExpanded: true,
+            leading: const Icon(Icons.layers_outlined),
+            title: const Text('Layer legend'),
+            children: [
+              Wrap(
+                spacing: 16,
+                runSpacing: 12,
+                children: _getLegendItems(),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.info_outline, color: Colors.blue),
+              title: const Text('Export tips'),
+              subtitle: const Text('Use the toolbar icons in the app bar to generate PDF, image, or CSV outputs with this site map.'),
+            ),
           ),
         ],
       ),
@@ -254,48 +466,64 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
     );
   }
 
-  Widget _buildMap() {
-    final center = LatLng(
-      widget.site.latitude ?? -37.8136,
-      widget.site.longitude ?? 144.9631,
+  Widget _styleChip(String label, String style, IconData icon) {
+    final isSelected = _selectedStyle == style;
+    return ChoiceChip(
+      avatar: Icon(icon, size: 16, color: isSelected ? Colors.white : Colors.black87),
+      label: Text(label),
+      selected: isSelected,
+      showCheckmark: false,
+      labelStyle: TextStyle(color: isSelected ? Colors.white : Colors.black87),
+      selectedColor: Colors.deepPurple,
+      backgroundColor: Colors.grey.shade200,
+      onSelected: (_) => setState(() => _selectedStyle = style),
     );
+  }
 
-    return RepaintBoundary(
-      key: _mapKey,
-      child: FlutterMap(
-        mapController: _mapController,
-        options: MapOptions(
-          initialCenter: center,
-          initialZoom: 19.0,
-          maxZoom: 22.0,
-          minZoom: 15.0,
-        ),
-        children: [
-        Opacity(
-          opacity: _mapOpacity,
-          child: TileLayer(
-            urlTemplate: _getTileUrl(),
-            subdomains: const ['a', 'b', 'c'],
-          ),
-        ),
-        
-        // Tree protection zones (TPZ)
-        if (_showProtectionZones) ..._buildProtectionZones(),
-        
-        // Structural root zones (SRZ)
-        if (_showSRZ) ..._buildSRZZones(),
-        
-        // Tree canopy circles
-        if (_showCanopyCircles) ..._buildCanopyCircles(),
-        
-        // Tree markers
-        ..._buildTreeMarkers(),
-        
-        // Tree labels
-        if (_showTreeLabels) ..._buildTreeLabels(),
-      ],
-      ),
+  Widget _insightChip(IconData icon, String label, String value) {
+    return Chip(
+      avatar: Icon(icon, size: 16),
+      label: Text('$label: $value'),
     );
+  }
+
+  Widget _layerSwitch(String label, bool value, ValueChanged<bool> onChanged) {
+    return SwitchListTile.adaptive(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      title: Text(label),
+      value: value,
+      onChanged: onChanged,
+    );
+  }
+
+  List<Widget> _buildMapLayers() {
+    final layers = <Widget>[
+      Opacity(
+        opacity: _mapOpacity,
+        child: TileLayer(
+          urlTemplate: _getTileUrl(),
+          subdomains: const ['a', 'b', 'c'],
+        ),
+      ),
+    ];
+
+    if (_showProtectionZones) {
+      layers.addAll(_buildProtectionZones());
+    }
+    if (_showSRZ) {
+      layers.addAll(_buildSRZZones());
+    }
+    if (_showCanopyCircles) {
+      layers.addAll(_buildCanopyCircles());
+    }
+
+    layers.addAll(_buildTreeMarkers());
+    if (_showTreeLabels) {
+      layers.addAll(_buildTreeLabels());
+    }
+
+    return layers;
   }
 
   String _getTileUrl() {
@@ -528,20 +756,6 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
     );
   }
 
-  Widget _buildLegend() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      color: Colors.white,
-      child: Row(
-        children: [
-          const Text('Legend: ', style: TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(width: 16),
-          ..._getLegendItems(),
-        ],
-      ),
-    );
-  }
-
   List<Widget> _getLegendItems() {
     switch (_colorScheme) {
       case 'condition':
@@ -599,78 +813,6 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
     );
   }
 
-  void _showExportMenu() {
-    print('📋 _showExportMenu() called - showing dialog');
-    print('📊 Trees available: ${_trees.length}');
-    print('📍 Trees with coordinates: ${_trees.where((t) => t.latitude != null && t.longitude != null).length}');
-    
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierColor: Colors.black54,
-      builder: (context) {
-        print('🎨 Dialog builder called - creating AlertDialog');
-        return AlertDialog(
-        title: const Text('Export Site Map'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.image, color: Colors.blue),
-              title: const Text('Export as PNG Image'),
-              subtitle: const Text('High-resolution raster image for reports'),
-              onTap: () {
-                print('📸 PNG export selected');
-                Navigator.pop(context);
-                _exportAsImage();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.picture_as_pdf, color: Colors.red),
-              title: const Text('Export as PDF'),
-              subtitle: const Text('Professional site plan document'),
-              onTap: () {
-                print('📄 PDF export selected');
-                Navigator.pop(context);
-                _exportAsPDF();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.code, color: Colors.orange),
-              title: const Text('Export as KML'),
-              subtitle: const Text('Google Earth / GIS format'),
-              onTap: () {
-                print('🗺️ KML export selected');
-                Navigator.pop(context);
-                _exportAsKML();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.table_chart, color: Colors.green),
-              title: const Text('Export Tree Data (CSV)'),
-              subtitle: const Text('Spreadsheet with tree coordinates'),
-              onTap: () {
-                print('📊 CSV export selected');
-                Navigator.pop(context);
-                _exportTreeDataCSV();
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              print('❌ Export cancelled');
-              Navigator.pop(context);
-            },
-            child: const Text('Cancel'),
-          ),
-        ],
-        );
-      },
-    );
-  }
-
   Future<void> _exportAsImage() async {
     try {
       // Show loading
@@ -694,30 +836,29 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
         ),
       );
 
-      print('📸 Capturing map as image...');
-      
-      // Wait a moment for map to render
-      await Future.delayed(const Duration(milliseconds: 500));
-      
-      // Capture the map widget as an image
-      final RenderRepaintBoundary boundary = _mapKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-      final ui.Image image = await boundary.toImage(pixelRatio: 3.0); // High resolution
-      final ByteData? byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      final Uint8List pngBytes = byteData!.buffer.asUint8List();
-      
-      final filename = '${widget.site.name.replaceAll(' ', '_')}_map_${DateTime.now().millisecondsSinceEpoch}.png';
-      
-      print('📊 Map image captured: ${pngBytes.length} bytes, Size: ${image.width}x${image.height}');
-      
-      // Download as PNG
-      final blob = html.Blob([pngBytes], 'image/png');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', filename)
-        ..click();
-      html.Url.revokeObjectUrl(url);
-      print('✅ Image downloaded');
-      
+      // Capture map
+      final boundary = _mapKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Unable to capture map widget.')));
+        return;
+      }
+
+      await Future.delayed(const Duration(milliseconds: 250));
+
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to encode map image.')));
+        return;
+      }
+
+      final pngBytes = byteData.buffer.asUint8List();
+      final filename = 'site_map_${widget.site.name.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.png';
+
+      await downloadFile(pngBytes, filename, 'image/png');
+
       // Save to Files tab
       try {
         await _saveToFilesTab(
@@ -729,30 +870,18 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
         );
         print('✅ File saved to Files tab');
       } catch (e) {
-        print('⚠️ Could not save to Files tab: $e');
+        debugPrint('Could not save map image to Files tab: $e');
       }
-      
-      // Close loading dialog
       Navigator.pop(context);
-      
-      // Show success
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('✅ Map screenshot saved!\n\n$filename\n\n• Downloaded to computer\n• Saved to Files tab (click refresh icon)'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 5),
-        ),
+        SnackBar(content: Text('Site map exported as $filename')),
       );
-      
-      print('✅ Map screenshot complete');
     } catch (e) {
       Navigator.pop(context); // Close loading
-      print('❌ Image export error: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('❌ Image export failed: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
+          content: Text('Image export failed: $e'),
         ),
       );
     }
@@ -1365,12 +1494,7 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
       print('📊 PDF generated: ${bytes.length} bytes');
       
       // Download file
-      final blob = html.Blob([bytes], 'application/pdf');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', filename)
-        ..click();
-      html.Url.revokeObjectUrl(url);
+      await downloadFile(bytes, filename, 'application/pdf');
       print('✅ PDF downloaded');
       
       // Save to Files tab
@@ -1445,7 +1569,7 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
       print('📊 Content size: ${kmlContent.length} bytes');
       
       // Download file
-      _downloadFile(filename, kmlContent, 'application/vnd.google-earth.kml+xml');
+      await _downloadFile(filename, kmlContent, 'application/vnd.google-earth.kml+xml');
       print('✅ File downloaded to browser');
       
       // Save to Files tab
@@ -1508,7 +1632,10 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
       );
 
       // Generate CSV with tree data including coordinates
-      final csvContent = _generateTreeCSV();
+      final csvContent = TreeCsvExporter.generate(
+      trees: _trees,
+      includePhotos: true,
+    );
       final filename = '${widget.site.name.replaceAll(' ', '_')}_trees_${DateTime.now().millisecondsSinceEpoch}.csv';
       
       print('📤 Exporting CSV: $filename');
@@ -1516,7 +1643,7 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
       print('📊 Trees exported: ${_trees.length}');
       
       // Download file
-      _downloadFile(filename, csvContent, 'text/csv');
+      await _downloadFile(filename, csvContent, 'text/csv');
       print('✅ File downloaded to browser');
       
       // Save to Files tab
@@ -1698,311 +1825,6 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
     return buffer.toString();
   }
 
-  String _generateTreeCSV() {
-    print('🌳 Generating CSV for ${_trees.length} trees based on export groups');
-    final buffer = StringBuffer();
-    
-    // Determine which columns to include based on first tree's export groups
-    // (assuming all trees in site use same export preferences)
-    final exportGroups = _trees.isNotEmpty 
-        ? Map<String, bool>.from(_trees.first.exportGroups) 
-        : <String, bool>{};
-    
-    // Build header dynamically based on enabled groups
-    List<String> headers = ['Tree_ID'];
-    
-    // Photos & Documentation
-    if (exportGroups['photos'] ?? true) {
-      headers.addAll(['Image_Local_Paths', 'Image_URLs', 'Photo_Count']);
-    }
-    
-    // Voice Notes & Audio
-    if (exportGroups['voice_notes'] ?? true) {
-      headers.addAll(['Voice_Notes', 'Voice_Audio_Path', 'Voice_Audio_URL']);
-    }
-    
-    // Basic Data
-    if (exportGroups['basic_data'] ?? true) {
-      headers.addAll(['Species', 'DSH_cm', 'Height_m', 'Age_Class', 'Condition', 'Canopy_Spread_m', 'Clearance_To_Structures_m', 'Origin', 'Past_Management', 'Permit_Required', 'Comments']);
-    }
-    
-    // Location
-    if (exportGroups['location'] ?? true) {
-      headers.addAll(['Location_Description', 'Latitude', 'Longitude', 'Site_Type', 'Land_Use_Zone', 'Soil_Type', 'Soil_Compaction', 'Drainage', 'Site_Slope', 'Aspect', 'Proximity_To_Buildings_m', 'Proximity_To_Services']);
-    }
-    
-    // Health Assessment
-    if (exportGroups['health'] ?? true) {
-      headers.addAll(['Vigor_Rating', 'Foliage_Density', 'Foliage_Color', 'Dieback_Percent', 'Stress_Indicators', 'Growth_Rate', 'Seasonal_Condition', 'Health_Form', 'Pest_Presence']);
-    }
-    
-    // Structure
-    if (exportGroups['structure'] ?? true) {
-      headers.addAll(['Crown_Form', 'Crown_Density', 'Branch_Structure', 'Trunk_Form', 'Trunk_Lean', 'Lean_Direction', 'Root_Plate_Condition', 'Buttress_Roots', 'Surface_Roots', 'Included_Bark', 'Included_Bark_Location', 'Structural_Defects', 'Structural_Rating']);
-    }
-    
-    // Protection Zones
-    if (exportGroups['protection_zones'] ?? true) {
-      headers.addAll(['TPZ_Area_m2', 'SRZ_m', 'NRZ_m']);
-    }
-    
-    // VTA
-    if (exportGroups['vta'] ?? true) {
-      headers.addAll(['Cavity_Present', 'Cavity_Size', 'Cavity_Location', 'Decay_Extent', 'Decay_Type', 'Fungal_Fruiting_Bodies', 'Fungal_Species', 'Bark_Damage_%', 'Bark_Damage_Type', 'Cracks_Splits', 'Cracks_Location', 'Dead_Wood_%', 'Girdling_Roots', 'Girdling_Severity', 'Root_Damage', 'Root_Damage_Description', 'Mechanical_Damage', 'Mechanical_Damage_Description', 'VTA_Notes', 'VTA_Defects', 'Diseases_Present']);
-    }
-    
-    // ISA Risk
-    if (exportGroups['isa_risk'] ?? true) {
-      headers.addAll(['Target_Occupancy', 'Defects_Observed', 'Likelihood_Failure', 'Likelihood_Impact', 'Consequence_Failure', 'Overall_Risk_Rating', 'Risk_Rating']);
-    }
-    
-    // Development Compliance
-    if (exportGroups['development'] ?? true) {
-      headers.addAll(['Planning_Permit_Required', 'Planning_Permit_Number', 'Planning_Permit_Status', 'Planning_Overlay', 'Heritage_Overlay', 'Significant_Landscape_Overlay', 'Vegetation_Protection_Overlay', 'Local_Law_Protected', 'Local_Law_Reference', 'AS4970_Compliant', 'Arborist_Report_Required', 'Council_Notification', 'Neighbor_Notification']);
-    }
-    
-    // Retention & Removal
-    if (exportGroups['retention_removal'] ?? true) {
-      headers.addAll(['Retention_Value', 'Retention_Recommendation', 'Retention_Justification', 'Removal_Justification', 'Significance', 'Replanting_Required', 'Replacement_Ratio', 'Offset_Requirements']);
-    }
-    
-    // Management & Works
-    if (exportGroups['management'] ?? true) {
-      headers.addAll(['Recommended_Works', 'Pruning_Type', 'Pruning_Specification', 'Works_Priority', 'Works_Timeframe', 'Estimated_Cost', 'Access_Requirements', 'Arborist_Supervision_Required', 'Tree_Protection_Measures', 'Post_Works_Monitoring', 'Post_Works_Monitoring_Frequency', 'Works_Completion_Date', 'Works_Compliance']);
-    }
-    
-    // QTRA
-    if (exportGroups['qtra'] ?? true) {
-      headers.addAll(['QTRA_Target_Type', 'QTRA_Target_Value', 'QTRA_Occupancy_Rate', 'QTRA_Impact_Potential', 'QTRA_Probability_Failure', 'QTRA_Probability_Impact', 'QTRA_Risk_Of_Harm', 'QTRA_Risk_Rating']);
-    }
-    
-    // Impact Assessment
-    if (exportGroups['impact_assessment'] ?? true) {
-      headers.addAll(['Development_Type', 'Construction_Distance_m', 'Root_Encroachment_%', 'Canopy_Encroachment_%', 'Excavation_Impact', 'Service_Installation_Impact', 'Service_Installation_Description', 'Demolition_Impact', 'Demolition_Description', 'Access_Route_Impact', 'Access_Route_Description', 'Impact_Rating', 'Mitigation_Measures']);
-    }
-    
-    // Valuation
-    if (exportGroups['valuation'] ?? false) {
-      headers.addAll(['Valuation_Method', 'Base_Value', 'Condition_Factor', 'Location_Factor', 'Contribution_Factor', 'Total_Valuation', 'Valuation_Date', 'Valuer_Name']);
-    }
-    
-    // Ecological Value
-    if (exportGroups['ecological'] ?? true) {
-      headers.addAll(['Wildlife_Habitat_Value', 'Hollow_Bearing_Tree', 'Nesting_Sites', 'Nesting_Species', 'Habitat_Features', 'Biodiversity_Value', 'Indigenous_Significance', 'Indigenous_Significance_Details', 'Cultural_Heritage', 'Cultural_Heritage_Details', 'Amenity_Value', 'Shade_Provision']);
-    }
-    
-    // Regulatory & Compliance
-    if (exportGroups['regulatory'] ?? true) {
-      headers.addAll(['State_Significant', 'Heritage_Listed', 'Heritage_Reference', 'Significant_Tree_Register', 'Bushfire_Management_Overlay', 'Environmental_Significance_Overlay', 'Waterway_Protection', 'Threatened_Species_Habitat', 'Insurance_Notification_Required', 'Legal_Liability_Assessment', 'Compliance_Notes']);
-    }
-    
-    // Monitoring & Scheduling
-    if (exportGroups['monitoring'] ?? true) {
-      headers.addAll(['Next_Inspection_Date', 'Inspection_Frequency', 'Monitoring_Required', 'Monitoring_Focus', 'Alert_Level', 'Follow_Up_Actions', 'Compliance_Check_Date']);
-    }
-    
-    // Advanced Diagnostics
-    if (exportGroups['diagnostics'] ?? false) {
-      headers.addAll(['Resistograph_Test', 'Resistograph_Date', 'Resistograph_Results', 'Sonic_Tomography', 'Sonic_Tomography_Date', 'Sonic_Tomography_Results', 'Pulling_Test', 'Pulling_Test_Date', 'Pulling_Test_Results', 'Root_Collar_Excavation', 'Root_Collar_Findings', 'Soil_Testing', 'Soil_Testing_Results', 'Pathology_Report', 'Diagnostic_Images', 'Specialist_Consultant', 'Diagnostic_Summary']);
-    }
-    
-    // Inspector Details
-    if (exportGroups['inspector_details'] ?? true) {
-      headers.addAll(['Inspector_Name', 'Inspection_Date', 'Sync_Status', 'Notes']);
-    }
-    
-    buffer.writeln(headers.join(','));
-    
-    for (var i = 0; i < _trees.length; i++) {
-      final tree = _trees[i];
-      final treeNum = i + 1;
-      final treeExportGroups = Map<String, bool>.from(tree.exportGroups);
-      
-      // Helper function to escape CSV values
-      String csv(dynamic value) {
-        if (value == null) return '';
-        final str = value.toString();
-        if (str.contains(',') || str.contains('"') || str.contains('\n')) {
-          return '"${str.replaceAll('"', '""')}"';
-        }
-        return str;
-      }
-      
-      // Build row dynamically based on enabled groups (matching header order)
-      List<String> rowValues = ['T$treeNum'];
-      
-      if (treeExportGroups['photos'] ?? true) {
-        rowValues.addAll([
-          csv(tree.imageLocalPaths.join(';')), 
-          csv(tree.imageUrls.join(';')), 
-          csv(tree.imageLocalPaths.length)
-        ]);
-      }
-      
-      if (treeExportGroups['voice_notes'] ?? true) {
-        rowValues.addAll([
-          csv(tree.voiceNotes), 
-          csv(tree.voiceNoteAudioPath), 
-          csv(tree.voiceAudioUrl)
-        ]);
-      }
-      
-      if (treeExportGroups['basic_data'] ?? true) {
-        rowValues.addAll([
-          csv(tree.species), csv(tree.dsh), csv(tree.height), csv(tree.ageClass),
-          csv(tree.condition), csv(tree.canopySpread), csv(tree.clearanceToStructures),
-          csv(tree.origin), csv(tree.pastManagement), csv(tree.permitRequired), csv(tree.comments)
-        ]);
-      }
-      
-      if (treeExportGroups['location'] ?? true) {
-        rowValues.addAll([
-          csv(tree.locationDescription), csv(tree.latitude), csv(tree.longitude),
-          csv(tree.siteType), csv(tree.landUseZone), csv(tree.soilType), csv(tree.soilCompaction),
-          csv(tree.drainage), csv(tree.siteSlope), csv(tree.aspect), 
-          csv(tree.proximityToBuildings), csv(tree.proximityToServices)
-        ]);
-      }
-      
-      if (treeExportGroups['health'] ?? true) {
-        rowValues.addAll([
-          csv(tree.vigorRating), csv(tree.foliageDensity), csv(tree.foliageColor),
-          csv(tree.diebackPercent), csv(tree.stressIndicators.join(';')), csv(tree.growthRate), 
-          csv(tree.seasonalCondition), csv(tree.healthForm), csv(tree.pestPresence)
-        ]);
-      }
-      
-      if (treeExportGroups['structure'] ?? true) {
-        rowValues.addAll([
-          csv(tree.crownForm), csv(tree.crownDensity), csv(tree.branchStructure),
-          csv(tree.trunkForm), csv(tree.trunkLean), csv(tree.leanDirection), csv(tree.rootPlateCondition),
-          csv(tree.buttressRoots), csv(tree.surfaceRoots), csv(tree.includedBark), 
-          csv(tree.includedBarkLocation), csv(tree.structuralDefects.join(';')), csv(tree.structuralRating)
-        ]);
-      }
-      
-      if (treeExportGroups['protection_zones'] ?? true) {
-        rowValues.addAll([csv(tree.tpzArea), csv(tree.srz), csv(tree.nrz)]);
-      }
-      
-      if (treeExportGroups['vta'] ?? true) {
-        rowValues.addAll([
-          csv(tree.cavityPresent), csv(tree.cavitySize), csv(tree.cavityLocation),
-          csv(tree.decayExtent), csv(tree.decayType), csv(tree.fungalFruitingBodies), csv(tree.fungalSpecies),
-          csv(tree.barkDamagePercent), csv(tree.barkDamageType.join(';')), csv(tree.cracksSplits), csv(tree.cracksSplitsLocation),
-          csv(tree.deadWoodPercent), csv(tree.girdlingRoots), csv(tree.girdlingRootsSeverity),
-          csv(tree.rootDamage), csv(tree.rootDamageDescription), csv(tree.mechanicalDamage), csv(tree.mechanicalDamageDescription),
-          csv(tree.vtaNotes), csv(tree.vtaDefects.join(';')), csv(tree.diseasesPresent)
-        ]);
-      }
-      
-      if (treeExportGroups['isa_risk'] ?? true) {
-        rowValues.addAll([
-          csv(tree.targetOccupancy), csv(tree.defectsObserved.join(';')),
-          csv(tree.likelihoodOfFailure), csv(tree.likelihoodOfImpact),
-          csv(tree.consequenceOfFailure), csv(tree.overallRiskRating), csv(tree.riskRating)
-        ]);
-      }
-      
-      if (treeExportGroups['development'] ?? true) {
-        rowValues.addAll([
-          csv(tree.planningPermitRequired), csv(tree.planningPermitNumber), csv(tree.planningPermitStatus),
-          csv(tree.planningOverlay), csv(tree.heritageOverlay), csv(tree.significantLandscapeOverlay),
-          csv(tree.vegetationProtectionOverlay), csv(tree.localLawProtected), csv(tree.localLawReference),
-          csv(tree.as4970Compliant), csv(tree.arboristReportRequired), csv(tree.councilNotification), csv(tree.neighborNotification)
-        ]);
-      }
-      
-      if (treeExportGroups['retention_removal'] ?? true) {
-        rowValues.addAll([
-          csv(tree.retentionValue), csv(tree.retentionRecommendation), csv(tree.retentionJustification),
-          csv(tree.removalJustification), csv(tree.significance), csv(tree.replantingRequired),
-          csv(tree.replacementRatio), csv(tree.offsetRequirements)
-        ]);
-      }
-      
-      if (treeExportGroups['management'] ?? true) {
-        rowValues.addAll([
-          csv(tree.recommendedWorks), csv(tree.pruningType.join(';')), csv(tree.pruningSpecification),
-          csv(tree.worksPriority), csv(tree.worksTimeframe), csv(tree.estimatedCostRange),
-          csv(tree.accessRequirements.join(';')), csv(tree.arboristSupervisionRequired),
-          csv(tree.treeProtectionMeasures), csv(tree.postWorksMonitoring), csv(tree.postWorksMonitoringFrequency),
-          csv(tree.worksCompletionDate), csv(tree.worksCompliance)
-        ]);
-      }
-      
-      if (treeExportGroups['qtra'] ?? true) {
-        rowValues.addAll([
-          csv(tree.qtraTargetType), csv(tree.qtraTargetValue), csv(tree.qtraOccupancyRate),
-          csv(tree.qtraImpactPotential), csv(tree.qtraProbabilityOfFailure), csv(tree.qtraProbabilityOfImpact),
-          csv(tree.qtraRiskOfHarm), csv(tree.qtraRiskRating)
-        ]);
-      }
-      
-      if (treeExportGroups['impact_assessment'] ?? true) {
-        rowValues.addAll([
-          csv(tree.developmentType), csv(tree.constructionZoneDistance), csv(tree.rootZoneEncroachmentPercent),
-          csv(tree.canopyEncroachmentPercent), csv(tree.excavationImpact), csv(tree.serviceInstallationImpact),
-          csv(tree.serviceInstallationDescription), csv(tree.demolitionImpact), csv(tree.demolitionDescription),
-          csv(tree.accessRouteImpact), csv(tree.accessRouteDescription), csv(tree.impactRating), csv(tree.mitigationMeasures)
-        ]);
-      }
-      
-      if (treeExportGroups['valuation'] ?? false) {
-        rowValues.addAll([
-          csv(tree.valuationMethod), csv(tree.baseValue), csv(tree.conditionFactor),
-          csv(tree.locationFactor), csv(tree.contributionFactor), csv(tree.totalValuation),
-          csv(tree.valuationDate), csv(tree.valuerName)
-        ]);
-      }
-      
-      if (treeExportGroups['ecological'] ?? true) {
-        rowValues.addAll([
-          csv(tree.wildlifeHabitatValue), csv(tree.hollowBearingTree), csv(tree.nestingSites),
-          csv(tree.nestingSpecies), csv(tree.habitatFeatures.join(';')), csv(tree.biodiversityValue),
-          csv(tree.indigenousSignificance), csv(tree.indigenousSignificanceDetails),
-          csv(tree.culturalHeritage), csv(tree.culturalHeritageDetails), csv(tree.amenityValue), csv(tree.shadeProvision)
-        ]);
-      }
-      
-      if (treeExportGroups['regulatory'] ?? true) {
-        rowValues.addAll([
-          csv(tree.stateSignificant), csv(tree.heritageListed), csv(tree.heritageReference),
-          csv(tree.significantTreeRegister), csv(tree.bushfireManagementOverlay), csv(tree.environmentalSignificanceOverlay),
-          csv(tree.waterwayProtection), csv(tree.threatenedSpeciesHabitat), csv(tree.insuranceNotificationRequired),
-          csv(tree.legalLiabilityAssessment), csv(tree.complianceNotes)
-        ]);
-      }
-      
-      if (treeExportGroups['monitoring'] ?? true) {
-        rowValues.addAll([
-          csv(tree.nextInspectionDate), csv(tree.inspectionFrequency), csv(tree.monitoringRequired),
-          csv(tree.monitoringFocus.join(';')), csv(tree.alertLevel), csv(tree.followUpActions), csv(tree.complianceCheckDate)
-        ]);
-      }
-      
-      if (treeExportGroups['diagnostics'] ?? false) {
-        rowValues.addAll([
-          csv(tree.resistographTest), csv(tree.resistographDate), csv(tree.resistographResults),
-          csv(tree.sonicTomography), csv(tree.sonicTomographyDate), csv(tree.sonicTomographyResults),
-          csv(tree.pullingTest), csv(tree.pullingTestDate), csv(tree.pullingTestResults),
-          csv(tree.rootCollarExcavation), csv(tree.rootCollarFindings), csv(tree.soilTesting), csv(tree.soilTestingResults),
-          csv(tree.pathologyReport), csv(tree.diagnosticImages.join(';')), csv(tree.specialistConsultant), csv(tree.diagnosticSummary)
-        ]);
-      }
-      
-      if (treeExportGroups['inspector_details'] ?? true) {
-        rowValues.addAll([
-          csv(tree.inspectorName), csv(tree.inspectionDate), csv(tree.syncStatus), csv(tree.notes)
-        ]);
-      }
-      
-      buffer.writeln(rowValues.join(','));
-    }
-    
-    print('✅ Comprehensive CSV generated: ${buffer.length} characters, ${_trees.length} trees');
-    return buffer.toString();
-  }
 
   Future<void> _exportAsWord() async {
     try {
@@ -2119,7 +1941,7 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
       final htmlString = html.toString();
       final filename = '${widget.site.name.replaceAll(' ', '_')}_tree_inventory_${DateTime.now().millisecondsSinceEpoch}.doc';
       
-      _downloadFile(filename, htmlString, 'application/msword');
+      await _downloadFile(filename, htmlString, 'application/msword');
       
       // Save to Files tab
       try {
@@ -2170,7 +1992,14 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
       );
     }
   }
-  
+
+  String _generateTreeCSV() {
+    return TreeCsvExporter.generate(
+      trees: _trees,
+      includePhotos: true,
+    );
+  }
+
   // Helper to parse CSV line (handles quoted commas)
   List<String> _parseCSVLine(String line) {
     final List<String> cells = [];
@@ -2194,14 +2023,9 @@ class _TreeLayoutMapPageState extends State<TreeLayoutMapPage> {
     return cells;
   }
 
-  void _downloadFile(String filename, String content, String mimeType) {
-    final bytes = utf8.encode(content);
-    final blob = html.Blob([bytes], mimeType);
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    final anchor = html.AnchorElement(href: url)
-      ..setAttribute('download', filename)
-      ..click();
-    html.Url.revokeObjectUrl(url);
+  Future<void> _downloadFile(String filename, String content, String mimeType) async {
+    final bytes = Uint8List.fromList(utf8.encode(content));
+    await downloadFile(bytes, filename, mimeType);
   }
 
   void _showMoreOptions() {

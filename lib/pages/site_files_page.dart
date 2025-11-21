@@ -10,7 +10,8 @@ import '../services/tree_storage_service.dart';
 import 'package:intl/intl.dart';
 import 'package:csv/csv.dart';
 import 'dart:convert';
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
+import '../services/tree_csv_exporter.dart';
 
 class SiteFilesPage extends StatefulWidget {
   final Site site;
@@ -27,6 +28,7 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
   String _selectedCategory = 'All';
   bool _isLoading = false;
   bool _isUploading = false;
+  String _currentFolder = '/';
   
   // CSV Export
   List<TreeEntry> _trees = [];
@@ -39,6 +41,144 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
     _loadFiles();
     _loadTrees();
     _generateCsvData();
+  }
+
+  Widget _buildFolderBreadcrumbs() {
+    final segments = _currentFolder.split('/').where((segment) => segment.isNotEmpty).toList();
+    final breadcrumbItems = <Widget>[];
+    String pathAccumulator = '/';
+
+    void navigateTo(String path) {
+      setState(() {
+        _currentFolder = path;
+        if (!_currentFolder.endsWith('/')) {
+          _currentFolder = '$_currentFolder/';
+        }
+        _filterFiles();
+      });
+    }
+
+    breadcrumbItems.add(
+      InkWell(
+        onTap: () => navigateTo('/'),
+        child: const Text('Root', style: TextStyle(fontWeight: FontWeight.bold)),
+      ),
+    );
+
+    for (int i = 0; i < segments.length; i++) {
+      pathAccumulator += '${segments[i]}/';
+      breadcrumbItems.add(const Icon(Icons.chevron_right, size: 18));
+      breadcrumbItems.add(
+        InkWell(
+          onTap: () => navigateTo(pathAccumulator),
+          child: Text(segments[i]),
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade200,
+        border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+      ),
+      child: Wrap(
+        alignment: WrapAlignment.start,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 4,
+        children: breadcrumbItems,
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.folder_open,
+            size: 64,
+            color: Colors.grey.shade400,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            _searchQuery.isNotEmpty || _selectedCategory != 'All'
+                ? 'No files match your search criteria'
+                : 'No files uploaded yet',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.grey.shade600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Tap the upload button to add files',
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFolderTile(SiteFile folder) {
+    final folderName = folder.folderPath.split('/').where((segment) => segment.isNotEmpty).last;
+    return ListTile(
+      leading: const Icon(Icons.folder, color: Colors.amber),
+      title: Text(folderName),
+      subtitle: const Text('Folder'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () {
+        setState(() {
+          _currentFolder = folder.folderPath;
+          if (!_currentFolder.endsWith('/')) {
+            _currentFolder = '$_currentFolder/';
+          }
+          _filterFiles();
+        });
+      },
+    );
+  }
+
+  Widget _buildFileTile(SiteFile file) {
+    return ListTile(
+      leading: Icon(_getFileIcon(file.fileType), color: _getFileColor(file.fileType)),
+      title: Text(file.originalName),
+      subtitle: Text('Uploaded ${DateFormat('MMM dd, yyyy').format(file.uploadDate)} • ${file.category}'),
+      trailing: PopupMenuButton<String>(
+        onSelected: (value) {
+          switch (value) {
+            case 'details':
+              _showFileDetails(file);
+              break;
+            case 'download':
+              SiteFileService.downloadFile(file);
+              break;
+            case 'share':
+              SiteFileService.shareFile(file);
+              break;
+            case 'edit':
+              _showEditFileDialog(file);
+              break;
+            case 'delete':
+              _deleteFile(file);
+              break;
+          }
+        },
+        itemBuilder: (context) => [
+          const PopupMenuItem(value: 'details', child: Text('Details')),
+          const PopupMenuItem(value: 'download', child: Text('Download')),
+          const PopupMenuItem(value: 'share', child: Text('Share')),
+          const PopupMenuItem(value: 'edit', child: Text('Edit')),
+          const PopupMenuItem(value: 'delete', child: Text('Delete')),
+        ],
+      ),
+      onTap: () => _showFileDetails(file),
+    );
   }
 
   Future<void> _loadFiles() async {
@@ -62,6 +202,9 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
   void _filterFiles() {
     setState(() {
       _filteredFiles = _files.where((file) {
+        if (!file.folderPath.startsWith(_currentFolder)) {
+          return false;
+        }
         final matchesSearch = _searchQuery.isEmpty ||
             file.originalName.toLowerCase().contains(_searchQuery.toLowerCase()) ||
             file.description.toLowerCase().contains(_searchQuery.toLowerCase());
@@ -77,6 +220,7 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
     setState(() {
       _trees = trees;
     });
+    _generateCsvData();
   }
 
   void _generateCsvData() {
@@ -87,44 +231,12 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
       return;
     }
 
-    // Create CSV headers
-    final headers = [
-      'Tree ID',
-      'Species',
-      'DSH (cm)',
-      'Height (m)',
-      'Condition',
-      'SRZ (m)',
-      'NRZ (m)',
-      'Latitude',
-      'Longitude',
-      'Comments',
-      'Date Added',
-    ];
+    final csvString = TreeCsvExporter.generate(
+      trees: _trees,
+      includePhotos: true,
+      forceAllGroups: true,
+    );
 
-    // Create CSV rows
-    final rows = _trees.map((tree) => [
-      tree.id,
-      tree.species,
-      tree.dsh.toString(),
-      tree.height.toString(),
-      tree.condition,
-      tree.srz.toString(),
-      tree.nrz.toString(),
-      tree.latitude.toString(),
-      tree.longitude.toString(),
-      tree.comments ?? '',
-      tree.inspectionDate != null 
-          ? DateFormat('dd/MM/yyyy HH:mm').format(tree.inspectionDate!)
-          : 'Not recorded',
-    ]).toList();
-
-    // Combine headers and rows
-    final csvData = [headers, ...rows];
-    
-    // Convert to CSV string
-    final csvString = const ListToCsvConverter().convert(csvData);
-    
     setState(() {
       _csvData = csvString;
     });
@@ -141,12 +253,8 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
     try {
       // For web, create a downloadable file
       final bytes = utf8.encode(_csvData);
-      final blob = html.Blob([bytes], 'text/csv');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', '${widget.site.name}_Trees_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv')
-        ..click();
-      html.Url.revokeObjectUrl(url);
+      final filename = '${widget.site.name.replaceAll(' ', '_')}_site_files_${DateTime.now().millisecondsSinceEpoch}.csv';
+      await downloadFile(bytes, filename, 'text/csv');
       
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('CSV downloaded successfully!')),
@@ -229,14 +337,16 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
   Future<void> _uploadFile() async {
     setState(() => _isUploading = true);
     try {
-      final file = await SiteFileService.pickAndUploadFile(
+      final files = await SiteFileService.pickAndUploadFiles(
         widget.site.id,
-        'User', // TODO: Get actual user name
+        'User',
+        category: 'General',
+        folderPath: _currentFolder,
       );
-      if (file != null) {
+      if (files.isNotEmpty) {
         await _loadFiles();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('File uploaded: ${file.originalName}')),
+          SnackBar(content: Text('Uploaded ${files.length} file${files.length == 1 ? '' : 's'}')),
         );
       }
     } catch (e) {
@@ -402,6 +512,15 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
 
   @override
   Widget build(BuildContext context) {
+    final folders = _files.where((file) => file.isFolder && file.folderPath.startsWith(_currentFolder)).toList();
+    final immediateFolders = folders.where((folder) {
+      final relative = folder.folderPath.replaceFirst(_currentFolder, '');
+      if (relative.isEmpty) return false;
+      return !relative.substring(1).contains('/');
+    }).toList();
+
+    final visibleFiles = _filteredFiles.where((file) => !file.isFolder).toList();
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Files - ${widget.site.name}'),
@@ -415,6 +534,7 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
       ),
       body: Column(
         children: [
+          _buildFolderBreadcrumbs(),
           // Search and Filter Bar
           Container(
             padding: const EdgeInsets.all(16),
@@ -572,136 +692,13 @@ class _SiteFilesPageState extends State<SiteFilesPage> {
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _filteredFiles.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.folder_open,
-                              size: 64,
-                              color: Colors.grey.shade400,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              _searchQuery.isNotEmpty || _selectedCategory != 'All'
-                                  ? 'No files match your search criteria'
-                                  : 'No files uploaded yet',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Tap the upload button to add files',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey.shade500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        itemCount: _filteredFiles.length,
-                        itemBuilder: (context, index) {
-                          final file = _filteredFiles[index];
-                          return Card(
-                            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            child: ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: _getFileColor(file.fileType),
-                                child: Icon(
-                                  _getFileIcon(file.fileType),
-                                  color: Colors.white,
-                                ),
-                              ),
-                              title: Text(
-                                file.originalName,
-                                style: const TextStyle(fontWeight: FontWeight.w500),
-                              ),
-                              subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('${file.fileType} • ${SiteFileService.formatFileSize(file.fileSize)}'),
-                                  Text(
-                                    'Uploaded ${DateFormat('MMM dd, yyyy').format(file.uploadDate)} by ${file.uploadedBy}',
-                                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                                  ),
-                                  if (file.description.isNotEmpty)
-                                    Text(
-                                      file.description,
-                                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                ],
-                              ),
-                              trailing: PopupMenuButton<String>(
-                                onSelected: (value) async {
-                                  switch (value) {
-                                    case 'download':
-                                      await SiteFileService.downloadFile(file);
-                                      break;
-                                    case 'share':
-                                      await SiteFileService.shareFile(file);
-                                      break;
-                                    case 'edit':
-                                      _showEditFileDialog(file);
-                                      break;
-                                    case 'delete':
-                                      await _deleteFile(file);
-                                      break;
-                                  }
-                                },
-                                itemBuilder: (context) => [
-                                  const PopupMenuItem(
-                                    value: 'download',
-                                    child: Row(
-                                      children: [
-                                        Icon(Icons.download),
-                                        SizedBox(width: 8),
-                                        Text('Download'),
-                                      ],
-                                    ),
-                                  ),
-                                  const PopupMenuItem(
-                                    value: 'share',
-                                    child: Row(
-                                      children: [
-                                        Icon(Icons.share),
-                                        SizedBox(width: 8),
-                                        Text('Share'),
-                                      ],
-                                    ),
-                                  ),
-                                  const PopupMenuItem(
-                                    value: 'edit',
-                                    child: Row(
-                                      children: [
-                                        Icon(Icons.edit),
-                                        SizedBox(width: 8),
-                                        Text('Edit Details'),
-                                      ],
-                                    ),
-                                  ),
-                                  const PopupMenuItem(
-                                    value: 'delete',
-                                    child: Row(
-                                      children: [
-                                        Icon(Icons.delete, color: Colors.red),
-                                        SizedBox(width: 8),
-                                        Text('Delete', style: TextStyle(color: Colors.red)),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              onTap: () => _showFileDetails(file),
-                            ),
-                          );
-                        },
+                : (immediateFolders.isEmpty && visibleFiles.isEmpty)
+                    ? _buildEmptyState()
+                    : ListView(
+                        children: [
+                          ...immediateFolders.map(_buildFolderTile),
+                          ...visibleFiles.map(_buildFileTile),
+                        ],
                       ),
           ),
         ],

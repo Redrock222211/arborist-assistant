@@ -5,7 +5,6 @@ import 'package:geocoding/geocoding.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:html' as html;
 
 import '../models/site.dart';
 import '../services/site_storage_service.dart';
@@ -14,7 +13,10 @@ import '../services/vicplan_service.dart';
 import '../services/planning_ai_service.dart';
 import '../services/regulatory_data_service.dart';
 import '../models/lga_tree_law.dart';
+import '../models/report_type.dart';
 import 'site_main_page.dart';
+import 'report_type_selector_dialog.dart';
+import '../utils/platform_download.dart';
 
 class SimpleWorkingDialog extends StatefulWidget {
   final Function(Site) onSiteCreated;
@@ -35,6 +37,29 @@ class _SimpleWorkingDialogState extends State<SimpleWorkingDialog> {
   LgaTreeLaw? _verifiedTreeLaw;
   final RegulatoryDataService _regulatoryService = RegulatoryDataService.instance;
   bool _showAIExplanation = false; // Collapsed by default
+  ReportType? _selectedReportType; // Selected report type for the site
+
+  @override
+  void initState() {
+    super.initState();
+    // Show report type selector immediately when dialog opens
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final selectedType = await showDialog<ReportType>(
+        context: context,
+        barrierDismissible: false, // Must select a type
+        builder: (context) => const ReportTypeSelectorDialog(),
+      );
+      
+      if (selectedType == null) {
+        // User cancelled - close the whole create site dialog
+        if (mounted) Navigator.of(context).pop();
+      } else {
+        setState(() {
+          _selectedReportType = selectedType;
+        });
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -400,14 +425,20 @@ class _SimpleWorkingDialogState extends State<SimpleWorkingDialog> {
         latitude: latitude,
         longitude: longitude,
         vicPlanData: _planningData,
+        reportType: _selectedReportType?.code ?? 'PAA', // Use selected report type
       );
 
       SiteStorageService.addSite(site);
       widget.onSiteCreated(site);
       Navigator.of(context).pop();
       
-      // Show post-creation guidance dialog
-      _showPostCreationDialog(context, site);
+      // Navigate directly to Trees tab to add trees
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => SiteMainPage(site: site, initialTab: 1), // Trees tab
+        ),
+      );
     }
   }
   
@@ -493,11 +524,14 @@ class _SimpleWorkingDialogState extends State<SimpleWorkingDialog> {
                 children: [
                   Icon(Icons.add_location, color: Colors.green[700], size: 28),
                   const SizedBox(width: 12),
-                  Text(
-                    'Add New Site',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green[700]),
+                  Expanded(
+                    child: Text(
+                      'Add New Site',
+                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.green[700]),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
                   ),
-                  const Spacer(),
                   IconButton(
                     onPressed: () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close),
@@ -511,6 +545,52 @@ class _SimpleWorkingDialogState extends State<SimpleWorkingDialog> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // Selected Report Type Display
+                      if (_selectedReportType != null)
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          margin: const EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.green.shade300),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.assignment, color: Colors.green.shade700, size: 24),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Report Type',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${_selectedReportType!.code} - ${_selectedReportType!.title}',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green.shade900,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                      maxLines: 2,
+                                      softWrap: true,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      
                       TextFormField(
                         controller: _nameController,
                         decoration: const InputDecoration(
@@ -844,10 +924,9 @@ class _SimpleWorkingDialogState extends State<SimpleWorkingDialog> {
                                                     overflow: TextOverflow.visible,
                                                   )
                                                 : GestureDetector(
-                                                    onTap: () {
+                                                    onTap: () async {
                                                       if (kIsWeb) {
-                                                        // ignore: undefined_prefixed_name
-                                                        html.window.open('https://www.planning.vic.gov.au/planning-schemes/zones', '_blank');
+                                                        await openUrlInBrowser('https://www.planning.vic.gov.au/planning-schemes/zones');
                                                       }
                                                     },
                                                     child: Row(
@@ -930,10 +1009,9 @@ class _SimpleWorkingDialogState extends State<SimpleWorkingDialog> {
                                                     overflow: TextOverflow.visible,
                                                   )
                                                 : GestureDetector(
-                                                    onTap: () {
+                                                    onTap: () async {
                                                       if (kIsWeb) {
-                                                        // ignore: undefined_prefixed_name
-                                                        html.window.open('https://www.planning.vic.gov.au/planning-schemes/overlays', '_blank');
+                                                        await openUrlInBrowser('https://www.planning.vic.gov.au/planning-schemes/overlays');
                                                       }
                                                     },
                                                     child: Row(

@@ -8,8 +8,10 @@ import '../services/site_storage_service.dart';
 import '../services/tree_storage_service.dart';
 import '../services/site_file_service.dart';
 import '../services/planning_ai_service.dart';
+import '../services/firebase_service.dart';
 import '../models/site.dart';
 import '../config/ai_config.dart';
+import '../services/ai_report_service.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -24,10 +26,15 @@ class _SettingsPageState extends State<SettingsPage> {
   String _scale = 'auto';
   String _placement = 'topRight';
   
-  // AI Configuration
+  // AI Configuration (Gemini for planning)
   final _apiKeyController = TextEditingController();
   bool _aiEnabled = false;
   bool _usingCustomKey = false;
+  
+  // AI Configuration (for report generation)
+  final _openAIKeyController = TextEditingController();
+  bool _openAIEnabled = false;
+  AIProvider _selectedProvider = AIProvider.openai;
 
   @override
   void initState() {
@@ -45,6 +52,7 @@ class _SettingsPageState extends State<SettingsPage> {
     
     // Load AI settings
     _loadAISettings();
+    _loadOpenAISettings();
   }
   
   Future<void> _loadAISettings() async {
@@ -59,9 +67,22 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
   
+  Future<void> _loadOpenAISettings() async {
+    final key = await AIReportService.getApiKey();
+    final enabled = await AIReportService.isAIEnabled();
+    final provider = await AIReportService.getProvider();
+    
+    setState(() {
+      _openAIKeyController.text = key ?? '';
+      _openAIEnabled = enabled;
+      _selectedProvider = provider;
+    });
+  }
+  
   @override
   void dispose() {
     _apiKeyController.dispose();
+    _openAIKeyController.dispose();
     super.dispose();
   }
 
@@ -194,7 +215,11 @@ class _SettingsPageState extends State<SettingsPage> {
           const SizedBox(height: 32),
           _buildAIConfigSection(),
           const SizedBox(height: 16),
+          _buildOpenAISection(),
+          const SizedBox(height: 16),
           _buildBackupSection(),
+          const SizedBox(height: 16),
+          _buildCloudSyncSection(),
           const SizedBox(height: 16),
           _buildDataSection(),
         ],
@@ -312,6 +337,125 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
   
+  Widget _buildOpenAISection() {
+    return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.auto_awesome, color: Colors.blue.shade600),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'OpenAI Configuration (Report Generation)',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  Switch(
+                    value: _openAIEnabled,
+                    onChanged: (value) async {
+                      await AIReportService.setOpenAIEnabled(value);
+                      setState(() => _openAIEnabled = value);
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Enable AI to automatically generate professional report text including introduction, discussion, conclusions, and recommendations.',
+                style: TextStyle(color: Colors.grey[700]),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<AIProvider>(
+                value: _selectedProvider,
+                decoration: const InputDecoration(
+                  labelText: 'AI Provider',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.cloud),
+                ),
+                items: AIProvider.values.map((provider) {
+                  return DropdownMenuItem(
+                    value: provider,
+                    child: Text(provider.name),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => _selectedProvider = value);
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _openAIKeyController,
+                decoration: InputDecoration(
+                  labelText: 'API Key',
+                  hintText: _selectedProvider == AIProvider.openai ? 'sk-...' : 
+                           _selectedProvider == AIProvider.anthropic ? 'sk-ant-...' : 
+                           'Enter your API key',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.help_outline),
+                    onPressed: () => _showOpenAIHelp(),
+                  ),
+                ),
+                obscureText: true,
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.save),
+                label: const Text('Save AI Settings'),
+                onPressed: _saveOpenAISettings,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextButton.icon(
+                icon: const Icon(Icons.open_in_new),
+                label: Text('Get ${_selectedProvider == AIProvider.openai ? "OpenAI" : _selectedProvider == AIProvider.anthropic ? "Anthropic" : "Google"} API Key'),
+                onPressed: () {
+                  final url = _selectedProvider == AIProvider.openai 
+                    ? 'https://platform.openai.com/api-keys'
+                    : _selectedProvider == AIProvider.anthropic
+                    ? 'https://console.anthropic.com/settings/keys'
+                    : 'https://aistudio.google.com/app/apikey';
+                  launchUrl(Uri.parse(url));
+                },
+              ),
+              if (_openAIEnabled && _openAIKeyController.text.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green.shade300),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle, size: 16, color: Colors.green.shade700),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'AI report generation enabled! Your reports will include automatically generated professional text.',
+                            style: TextStyle(fontSize: 12, color: Colors.green.shade900),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+  }
+  
   Future<void> _saveAISettings() async {
     final apiKey = _apiKeyController.text.trim();
     if (apiKey.isEmpty) {
@@ -388,6 +532,106 @@ class _SettingsPageState extends State<SettingsPage> {
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Future<void> _saveOpenAISettings() async {
+    final apiKey = _openAIKeyController.text.trim();
+    if (apiKey.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter an AI API key')),
+      );
+      return;
+    }
+    
+    await AIReportService.setApiKey(apiKey);
+    await AIReportService.setProvider(_selectedProvider);
+    await _loadOpenAISettings();
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('AI settings saved! Using ${_selectedProvider.name}')),
+      );
+    }
+  }
+  
+  void _showOpenAIHelp() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.auto_awesome, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('AI Report Generation'),
+          ],
+        ),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'What does this do?',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Automatically generate professional report text including:\n\n'
+                '• Introduction - Site context and assessment scope\n'
+                '• Discussion - Detailed analysis of tree population\n'
+                '• Conclusions - Summary of key findings\n'
+                '• Recommendations - Specific actionable advice',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'How it works:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'The AI analyzes your site data, tree assessments, risk ratings, and generates appropriate professional text tailored to the report type (PAA, AIA, TRA, etc.).',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Cost:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Uses GPT-4o-mini: ~\$0.03 per report\n'
+                'Very affordable for professional output!',
+                style: TextStyle(color: Colors.green),
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Get your API key:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              SizedBox(height: 8),
+              Text(
+                '1. Go to platform.openai.com/api-keys\n'
+                '2. Create a new secret key\n'
+                '3. Copy and paste it here\n'
+                '4. Start generating professional reports!',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              launchUrl(Uri.parse('https://platform.openai.com/api-keys'));
+            },
+            child: const Text('Get API Key'),
           ),
         ],
       ),
@@ -629,6 +873,103 @@ class _SettingsPageState extends State<SettingsPage> {
           NotificationService.showError(context, 'Failed to delete site: $e');
         }
       }
+    }
+  }
+
+  Widget _buildCloudSyncSection() {
+    final isOnline = FirebaseService.isOnline;
+    final user = FirebaseService.currentUser;
+    
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.cloud_upload, color: Colors.green.shade600),
+                const SizedBox(width: 8),
+                const Text(
+                  'Cloud Sync',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Icon(
+                  isOnline ? Icons.cloud_done : Icons.cloud_off,
+                  color: isOnline ? Colors.green : Colors.grey,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              user != null 
+                ? 'Upload your existing data to cloud. New data syncs automatically.'
+                : 'Sign in to sync your data across devices.',
+              style: const TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 16),
+            if (user != null) ...[
+              ElevatedButton.icon(
+                onPressed: isOnline ? _syncToCloud : null,
+                icon: const Icon(Icons.cloud_upload),
+                label: const Text('Sync All Data to Cloud'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  minimumSize: const Size(double.infinity, 48),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Email: ${user.email}',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+              if (!isOnline)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    '⚠️ Offline - Connect to internet to sync',
+                    style: TextStyle(fontSize: 12, color: Colors.orange[700]),
+                  ),
+                ),
+            ] else ...[
+              Text(
+                '⚠️ Not signed in',
+                style: TextStyle(fontSize: 12, color: Colors.orange[700]),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _syncToCloud() async {
+    try {
+      NotificationService.showLoadingDialog(context, 'Syncing to cloud...');
+      
+      // Get all local sites
+      final sites = SiteStorageService.getAllSites();
+      
+      // Upload each site
+      for (final site in sites) {
+        await FirebaseService.saveSite(site);
+        
+        // Get and upload all trees for this site
+        final trees = TreeStorageService.getTreesForSite(site.id);
+        for (final tree in trees) {
+          await FirebaseService.saveTree(tree);
+        }
+      }
+      
+      Navigator.of(context).pop(); // Close loading dialog
+      NotificationService.showSuccess(
+        context, 
+        'Synced ${sites.length} sites and ${sites.fold<int>(0, (sum, site) => sum + TreeStorageService.getTreesForSite(site.id).length)} trees to cloud!'
+      );
+    } catch (e) {
+      Navigator.of(context).pop(); // Close loading dialog
+      NotificationService.showError(context, 'Sync failed: $e');
     }
   }
 }

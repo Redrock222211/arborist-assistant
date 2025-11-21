@@ -13,6 +13,7 @@ class NotificationService {
         ),
         backgroundColor: Colors.green.shade600,
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
@@ -30,6 +31,7 @@ class NotificationService {
         ),
         backgroundColor: Colors.red.shade600,
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
@@ -47,6 +49,7 @@ class NotificationService {
         ),
         backgroundColor: Colors.blue.shade600,
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
@@ -64,6 +67,7 @@ class NotificationService {
         ),
         backgroundColor: Colors.orange.shade600,
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
@@ -104,6 +108,7 @@ class NotificationService {
     showDialog(
       context: context,
       barrierDismissible: false,
+      useRootNavigator: true,
       builder: (context) => AlertDialog(
         content: Row(
           children: [
@@ -117,7 +122,10 @@ class NotificationService {
   }
 
   static void hideLoadingDialog(BuildContext context) {
-    Navigator.of(context).pop();
+    final navigator = Navigator.of(context, rootNavigator: true);
+    if (navigator.canPop()) {
+      navigator.pop();
+    }
   }
 
   static void showFeatureComingSoon(BuildContext context, String featureName) {

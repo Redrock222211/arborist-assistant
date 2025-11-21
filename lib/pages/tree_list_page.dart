@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../models/tree_entry.dart';
 import '../models/site.dart';
+import '../models/report_type.dart';
 import '../widgets/tree_form.dart';
+import 'report_type_selector.dart';
 import '../services/tree_storage_service.dart';
 
 enum TreeSortOption {
@@ -145,6 +147,7 @@ class _TreeListPageState extends State<TreeListPage> {
           child: TreeForm(
             siteId: widget.site.id,
             initialEntry: entry,
+            reportType: widget.site.reportType,
             onSubmit: (updatedEntry) async {
               await TreeStorageService.updateTree(key, updatedEntry);
               Navigator.of(context).pop();
@@ -157,29 +160,15 @@ class _TreeListPageState extends State<TreeListPage> {
   }
 
   void _addTree() async {
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
-            left: 16,
-            right: 16,
-            top: 16,
-          ),
-          child: TreeForm(
-            siteId: widget.site.id,
-            initialEntry: null, // This will trigger auto-numbering
-            onSubmit: (entry) async {
-              await TreeStorageService.addTree(entry);
-              Navigator.of(context).pop();
-              _loadTrees();
-            },
-          ),
-        );
-      },
+    // Navigate to Report Type Selector instead of directly showing form
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ReportTypeSelector(site: widget.site),
+      ),
     );
+    // Reload trees when returning from the selector
+    _loadTrees();
   }
 
   void _deleteTree(dynamic key) async {
@@ -257,49 +246,52 @@ class _TreeListPageState extends State<TreeListPage> {
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  const Text('Sort by:'),
-                  const SizedBox(width: 8),
-                  DropdownButton<TreeSortOption>(
-                    value: _sortOption,
-                    onChanged: (option) {
-                      if (option != null) {
-                        setState(() {
-                          _sortOption = option;
-                          _applySort();
-                          _applyFilter();
-                        });
-                      }
-                    },
-                    items: const [
-                      DropdownMenuItem(
-                        value: TreeSortOption.species,
-                        child: Text('Species (A-Z)'),
-                      ),
-                      DropdownMenuItem(
-                        value: TreeSortOption.dbhAsc,
-                        child: Text('DBH (asc)'),
-                      ),
-                      DropdownMenuItem(
-                        value: TreeSortOption.dbhDesc,
-                        child: Text('DBH (desc)'),
-                      ),
-                      DropdownMenuItem(
-                        value: TreeSortOption.heightAsc,
-                        child: Text('Height (asc)'),
-                      ),
-                      DropdownMenuItem(
-                        value: TreeSortOption.heightDesc,
-                        child: Text('Height (desc)'),
-                      ),
-                      DropdownMenuItem(
-                        value: TreeSortOption.permitRequired,
-                        child: Text('Permit Required'),
-                      ),
-                    ],
-                  ),
-                ],
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    const Text('Sort by:'),
+                    const SizedBox(width: 8),
+                    DropdownButton<TreeSortOption>(
+                      value: _sortOption,
+                      onChanged: (option) {
+                        if (option != null) {
+                          setState(() {
+                            _sortOption = option;
+                            _applySort();
+                            _applyFilter();
+                          });
+                        }
+                      },
+                      items: const [
+                        DropdownMenuItem(
+                          value: TreeSortOption.species,
+                          child: Text('Species (A-Z)'),
+                        ),
+                        DropdownMenuItem(
+                          value: TreeSortOption.dbhAsc,
+                          child: Text('DBH (asc)'),
+                        ),
+                        DropdownMenuItem(
+                          value: TreeSortOption.dbhDesc,
+                          child: Text('DBH (desc)'),
+                        ),
+                        DropdownMenuItem(
+                          value: TreeSortOption.heightAsc,
+                          child: Text('Height (asc)'),
+                        ),
+                        DropdownMenuItem(
+                          value: TreeSortOption.heightDesc,
+                          child: Text('Height (desc)'),
+                        ),
+                        DropdownMenuItem(
+                          value: TreeSortOption.permitRequired,
+                          child: Text('Permit Required'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
             Padding(
@@ -315,7 +307,76 @@ class _TreeListPageState extends State<TreeListPage> {
             ),
             const Divider(height: 1),
             Expanded(
-              child: ListView.separated(
+              child: _filteredEntries.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.forest, size: 80, color: Colors.green[300]),
+                          const SizedBox(height: 24),
+                          Text(
+                            'No Trees Yet',
+                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Get started by adding your first tree!',
+                            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                          const SizedBox(height: 32),
+                          ElevatedButton.icon(
+                            onPressed: _addTree,
+                            icon: const Icon(Icons.add),
+                            label: const Text('Add First Tree'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                              textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            margin: const EdgeInsets.symmetric(horizontal: 32),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.blue.shade200),
+                            ),
+                            child: Column(
+                              children: [
+                                Icon(Icons.lightbulb, color: Colors.blue.shade700, size: 32),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Quick Tip',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    color: Colors.blue.shade900,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Tree forms are customized based on your site\'s report type.\n\nYou selected: ${widget.site.reportTypeEnum.title}',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.blue.shade800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.separated(
                 itemCount: _filteredEntries.length,
                 separatorBuilder: (context, index) => const Divider(),
                 itemBuilder: (context, index) {
@@ -402,16 +463,6 @@ class _TreeListPageState extends State<TreeListPage> {
               ),
             ),
           ],
-        ),
-        Positioned(
-          bottom: 16,
-          right: 16,
-          child: FloatingActionButton(
-            onPressed: _addTree,
-            backgroundColor: Colors.green,
-            child: const Icon(Icons.add, color: Colors.white),
-            tooltip: 'Add Tree',
-          ),
         ),
       ],
     );

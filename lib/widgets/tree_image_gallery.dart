@@ -1,7 +1,9 @@
-import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'dart:convert';
 import 'dart:io';
+
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 class TreeImageGallery extends StatefulWidget {
@@ -54,7 +56,7 @@ class _TreeImageGalleryState extends State<TreeImageGallery> {
           final ref = FirebaseStorage.instance.refFromURL(img);
           await ref.delete();
         } catch (_) {}
-      } else {
+      } else if (!img.startsWith('data:')) {
         final file = File(img);
         if (file.existsSync()) file.deleteSync();
       }
@@ -70,10 +72,26 @@ class _TreeImageGalleryState extends State<TreeImageGallery> {
   Widget _buildWebCompatibleImage(String imagePath) {
     try {
       if (imagePath.startsWith('http')) {
-        // Network image
         return Image.network(imagePath, fit: BoxFit.contain);
-      } else if (kIsWeb) {
-        // On web, we can't use File paths, so show a placeholder
+      }
+
+      if (imagePath.startsWith('data:')) {
+        final uri = Uri.parse(imagePath);
+        final data = uri.data;
+        if (data != null) {
+          final bytes = data.contentAsBytes();
+          return Image.memory(bytes, fit: BoxFit.contain);
+        }
+      }
+
+      if (!kIsWeb) {
+        final file = File(imagePath);
+        if (file.existsSync()) {
+          return Image.file(file, fit: BoxFit.contain);
+        }
+      }
+
+      if (kIsWeb) {
         return Container(
           decoration: BoxDecoration(
             color: Colors.grey[300],
@@ -85,17 +103,22 @@ class _TreeImageGalleryState extends State<TreeImageGallery> {
               Icon(Icons.image, size: 48, color: Colors.grey[600]),
               const SizedBox(height: 8),
               Text(
-                'Image: ${imagePath.split('/').last}',
+                imagePath.length > 30 ? '${imagePath.substring(0, 27)}...' : imagePath,
                 style: TextStyle(color: Colors.grey[600], fontSize: 12),
                 textAlign: TextAlign.center,
               ),
             ],
           ),
         );
-      } else {
-        // On mobile, use Image.file
-        return Image.file(File(imagePath), fit: BoxFit.contain);
       }
+
+      return Container(
+        decoration: BoxDecoration(
+          color: Colors.grey[300],
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Icon(Icons.error, color: Colors.red, size: 48),
+      );
     } catch (e) {
       // Fallback for any errors
       return Container(

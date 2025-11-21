@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import '../models/site.dart';
 import '../models/tree_entry.dart';
+import '../models/report_type.dart';
 import '../services/tree_storage_service.dart';
 import 'package:csv/csv.dart';
 import 'package:path_provider/path_provider.dart';
@@ -14,7 +14,6 @@ import '../services/branding_service.dart';
 import '../services/map_export_service.dart';
 import '../services/enhanced_export_service.dart';
 import '../services/notification_service.dart';
-import 'isa_report_page.dart';
 import 'package:intl/intl.dart';
 
 class ExportSyncPage extends StatefulWidget {
@@ -31,7 +30,7 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
   bool _selectAll = false;
   String _syncStatus = 'Up to date';
   bool _syncing = false;
-  String _selectedExportType = 'CSV';
+  String _selectedExportType = 'Word Template';
   bool _isBatchProcessing = false;
   int _batchProgress = 0;
   
@@ -52,13 +51,10 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
   final List<String> _frequencies = ['Daily', 'Weekly', 'Monthly', 'Quarterly'];
   
   final List<String> _exportTypes = [
-    'CSV',
-    'Word Document',
+    'Word Template', // Uses your DOCX template
+    'Tree Data (CSV)',
+    'Site Map Image',
     'PDF Report',
-    'Site Map',
-    'Comprehensive Report',
-    'ISA Report',
-    'Batch Export',
   ];
 
   @override
@@ -95,140 +91,6 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
       }
       _selectAll = _selectedIndexes.length == _trees.length;
     });
-  }
-
-  // Enhanced batch processing
-  Future<void> _processBatchExport() async {
-    if (_selectedIndexes.isEmpty) {
-      NotificationService.showError(context, 'Please select trees for batch export');
-      return;
-    }
-
-    setState(() {
-      _isBatchProcessing = true;
-      _batchProgress = 0;
-    });
-
-    final selectedTrees = _selectedIndexes.map((i) => _trees[i]).toList();
-    final totalExports = selectedTrees.length;
-    
-    try {
-      for (int i = 0; i < selectedTrees.length; i++) {
-        final tree = selectedTrees[i];
-        
-        // Update progress
-        setState(() {
-          _batchProgress = ((i + 1) / totalExports * 100).round();
-        });
-
-        // Export individual tree report
-        await _exportIndividualTreeReport(tree);
-        
-        // Small delay to show progress
-        await Future.delayed(const Duration(milliseconds: 200));
-      }
-
-      NotificationService.showSuccess(context, 'Batch export completed! ${selectedTrees.length} reports generated.');
-    } catch (e) {
-      NotificationService.showError(context, 'Batch export failed: $e');
-    } finally {
-      setState(() {
-        _isBatchProcessing = false;
-        _batchProgress = 0;
-      });
-    }
-  }
-
-  Future<void> _exportIndividualTreeReport(TreeEntry tree) async {
-    // Create a comprehensive individual tree report
-    final pdf = pw.Document();
-    
-    pdf.addPage(
-      pw.Page(
-        pageFormat: PdfPageFormat.a4,
-        build: (pw.Context context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              // Header
-              pw.Container(
-                width: double.infinity,
-                padding: const pw.EdgeInsets.all(20),
-                decoration: pw.BoxDecoration(
-                  color: PdfColors.green,
-                ),
-                child: pw.Text(
-                  'Tree Assessment Report',
-                  style: pw.TextStyle(
-                    color: PdfColors.white,
-                    fontSize: 24,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
-                ),
-              ),
-              pw.SizedBox(height: 20),
-              
-              // Tree Information
-              pw.Text(
-                'Tree ID: ${tree.id}',
-                style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text('Species: ${tree.species ?? 'Unknown'}'),
-              pw.Text('DSH: ${tree.dsh} cm'),
-              pw.Text('Height: ${tree.height} m'),
-              pw.Text('Condition: ${tree.condition}'),
-              pw.SizedBox(height: 20),
-              
-              // Risk Assessment
-              pw.Text(
-                'Risk Assessment',
-                style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
-              ),
-              pw.SizedBox(height: 10),
-              pw.Text('Overall Risk: ${tree.overallRiskRating}'),
-              pw.Text('Likelihood of Failure: ${tree.likelihoodOfFailure}'),
-              pw.Text('Likelihood of Impact: ${tree.likelihoodOfImpact}'),
-              pw.Text('Consequence of Failure: ${tree.consequenceOfFailure}'),
-              pw.SizedBox(height: 20),
-              
-              // Recommendations
-              if (tree.recommendedWorks?.isNotEmpty == true) ...[
-                pw.Text(
-                  'Recommended Works',
-                  style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
-                ),
-                pw.SizedBox(height: 10),
-                pw.Text(tree.recommendedWorks!),
-                pw.SizedBox(height: 20),
-              ],
-              
-              // Notes
-              if (tree.notes?.isNotEmpty == true) ...[
-                pw.Text(
-                  'Notes',
-                  style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
-                ),
-                pw.SizedBox(height: 10),
-                pw.Text(tree.notes!),
-              ],
-            ],
-          );
-        },
-      ),
-    );
-
-    // Save the PDF
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/tree_${tree.id}_report_${DateTime.now().millisecondsSinceEpoch}.pdf');
-    await file.writeAsBytes(await pdf.save());
-    
-    if (kIsWeb) {
-      // For web, trigger download
-      // Implementation would depend on web-specific file handling
-    } else {
-      await Share.shareXFiles([XFile(file.path)], text: 'Tree report for ${tree.id}');
-    }
   }
 
   // Enhanced template management
@@ -513,48 +375,6 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('CSV exported and ready to share.')));
   }
 
-  Future<void> _exportAsWordDocument(List<TreeEntry> selectedTrees) async {
-    try {
-      // For now, create a simple text file as Word document export is complex
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/tree_report_${widget.site.name.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.txt');
-      
-      String content = 'Tree Assessment Report\n';
-      content += 'Site: ${widget.site.name}\n';
-      content += 'Date: ${DateTime.now().toString().split(' ')[0]}\n\n';
-      content += 'Tree Summary:\n';
-      content += 'Total Trees: ${selectedTrees.length}\n\n';
-      
-      for (int i = 0; i < selectedTrees.length; i++) {
-        final tree = selectedTrees[i];
-        content += 'Tree ${i + 1}: ${tree.id}\n';
-        content += 'Species: ${tree.species}\n';
-        content += 'DSH: ${tree.dsh} cm\n';
-        content += 'Height: ${tree.height} m\n';
-        content += 'Condition: ${tree.condition}\n';
-        content += 'SRZ: ${tree.srz} m\n';
-        content += 'NRZ: ${tree.nrz} m\n';
-        if (tree.comments.isNotEmpty) {
-          content += 'Comments: ${tree.comments}\n';
-        }
-        content += '\n';
-      }
-      
-      await file.writeAsString(content);
-      
-      // Share the document
-      await Share.shareXFiles([XFile(file.path)], text: 'Tree Assessment Report - ${widget.site.name}');
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Tree report exported successfully!')),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to export report: $e')),
-      );
-    }
-  }
-
   Future<void> _exportAsPdfReport(List<TreeEntry> selectedTrees) async {
     // Show dialog to select report type
     final reportType = await showDialog<String>(
@@ -627,11 +447,11 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
     String previewTitle = '';
 
     switch (_selectedExportType) {
-      case 'CSV':
+      case 'Tree Data (CSV)':
         previewTitle = 'CSV Preview';
         previewContent = _generateCsvPreview(selected);
         break;
-      case 'Word Document':
+      case 'Word Template':
         previewTitle = 'Word Document Preview';
         previewContent = _generateWordPreview(selected);
         break;
@@ -639,6 +459,13 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
         previewTitle = 'PDF Report Preview';
         previewContent = _generatePdfPreview(selected);
         break;
+      case 'Site Map Image':
+        previewTitle = 'Site Map Preview';
+        previewContent = 'Site map will be generated with:\n• ${selected.length} trees marked\n• SRZ/TPZ zones displayed\n• Legend and scale\n• Site information';
+        break;
+      default:
+        previewTitle = 'Preview';
+        previewContent = 'Preview not available for this export type';
     }
 
     showDialog(
@@ -777,47 +604,16 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
     final selected = _selectedIndexes.map((i) => _trees[i]).toList();
     if (selected.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select at least one tree to export')),
+        const SnackBar(
+          content: Text('Please select at least one tree to export'),
+          duration: Duration(seconds: 1),
+        ),
       );
       return;
     }
     
-    switch (_selectedExportType) {
-      case 'CSV':
-        await _exportAsCsv();
-        break;
-      case 'Word Document':
-        await _exportAsWordDocument(selected);
-        break;
-      case 'PDF Report':
-        await _exportAsPdfReport(selected);
-        break;
-      case 'ISA Report':
-        if (selected.length == 1) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => IsaReportPage(
-                site: widget.site,
-                tree: selected.first,
-              ),
-            ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('ISA Report requires exactly one tree selection')),
-          );
-        }
-        break;
-      case 'Site Map':
-        await _exportSiteMap();
-        break;
-      case 'Comprehensive Report':
-        await _exportComprehensiveReport();
-        break;
-      case 'Batch Export':
-        await _processBatchExport();
-        break;
-    }
+    // Always export Word template since we removed the dropdown
+    await _exportProfessionalReport();
   }
 
   Future<void> _exportPreliminaryAssessment(List<TreeEntry> selectedTrees) async {
@@ -2015,16 +1811,8 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
   }
 
   String _getReportTypeDescription() {
-    switch (_selectedExportType) {
-      case 'CSV':
-        return 'Export tree data as a CSV file for use in spreadsheets and databases.';
-      case 'Word Document':
-        return 'Export tree data as a formatted text report.';
-      case 'PDF Report':
-        return 'Export tree data as a professional PDF report with comprehensive analysis.';
-      default:
-        return '';
-    }
+    final reportType = widget.site.reportTypeEnum;
+    return '📄 ${reportType.title}\n\nGenerates a professional Microsoft Word report using the ${reportType.code} template. All tree data, site information, and assessments will be automatically populated. AI-generated content will be included if enabled in settings.\n\nTemplate: ${reportType.templateFilename}';
   }
 
   void _addRemainingSections(pw.Document pdf, List<TreeEntry> selectedTrees) {
@@ -2506,25 +2294,12 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
           padding: const EdgeInsets.all(8.0),
           child: Column(
             children: [
-              // Export Type Selection
+              // Sync Controls
               Row(
                 children: [
-                  const Text('Export Type: ', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Icon(Icons.description, color: Colors.blue),
                   const SizedBox(width: 8),
-                  DropdownButton<String>(
-                    value: _selectedExportType,
-                    onChanged: (String? newValue) {
-                      setState(() {
-                        _selectedExportType = newValue!;
-                      });
-                    },
-                    items: _exportTypes.map<DropdownMenuItem<String>>((String value) {
-                      return DropdownMenuItem<String>(
-                        value: value,
-                        child: Text(value),
-                      );
-                    }).toList(),
-                  ),
+                  const Text('Word Report Export', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                   const Spacer(),
                   ElevatedButton.icon(
                     icon: const Icon(Icons.sync),
@@ -2567,7 +2342,7 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
                   const Spacer(),
                   ElevatedButton.icon(
                     icon: const Icon(Icons.download),
-                    label: const Text('Export'),
+                    label: const Text('Export Word Report'),
                     onPressed: _selectedIndexes.isEmpty ? null : _exportData,
                   ),
                 ],
@@ -2586,12 +2361,6 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
                 ),
               ),
               const SizedBox(height: 16),
-              
-              // Enhanced Features Section
-              if (_selectedExportType == 'PDF Report' || _selectedExportType == 'Word Document' || _selectedExportType == 'Comprehensive Report') ...[
-                _buildTemplateSelector(),
-                const SizedBox(height: 16),
-              ],
               
               // Auto-scheduling Section
               _buildAutoScheduling(),
@@ -2835,6 +2604,51 @@ class _ExportSyncPageState extends State<ExportSyncPage> {
     } catch (e) {
       Navigator.of(context).pop(); // Close loading dialog
       NotificationService.showError(context, 'Failed to generate comprehensive report: $e');
+    }
+  }
+
+  /// Export complete package: DOCX Report + CSV Data + Site Map Image
+  Future<void> _exportCompletePackage() async {
+    try {
+      NotificationService.showLoadingDialog(context, 'Creating complete report package...\n\n• Professional DOCX Report\n• Tree Data CSV\n• Site Map Image');
+      
+      // Generate all three exports
+      await Future.wait([
+        EnhancedExportService.exportSiteReport(widget.site), // DOCX using template
+        _exportAsCsv(), // CSV data
+        _exportSiteMap(), // Map image
+      ]);
+      
+      Navigator.of(context).pop(); // Close loading dialog
+      NotificationService.showSuccess(
+        context, 
+        'Complete package exported!\n\n✓ DOCX Report (${widget.site.reportTypeEnum.title})\n✓ Tree Data CSV\n✓ Site Map Image'
+      );
+    } catch (e) {
+      Navigator.of(context).pop(); // Close loading dialog
+      NotificationService.showError(context, 'Failed to create complete package: $e');
+    }
+  }
+
+  /// Export professional DOCX report using appropriate template
+  Future<void> _exportProfessionalReport() async {
+    try {
+      final reportType = widget.site.reportTypeEnum;
+      NotificationService.showLoadingDialog(
+        context, 
+        'Generating ${reportType.code} Report...\n\n${reportType.title}\n\nUsing professional DOCX template'
+      );
+      
+      await EnhancedExportService.exportSiteReport(widget.site);
+      
+      Navigator.of(context).pop(); // Close loading dialog
+      NotificationService.showSuccess(
+        context, 
+        'Professional report generated!\n\n${reportType.code} - ${reportType.title}\n\nTemplate: ${reportType.templateFilename}'
+      );
+    } catch (e) {
+      Navigator.of(context).pop(); // Close loading dialog
+      NotificationService.showError(context, 'Failed to generate professional report: $e');
     }
   }
 }

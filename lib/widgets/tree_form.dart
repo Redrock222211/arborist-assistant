@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:async';
+import 'dart:convert';
 import '../models/tree_entry.dart';
 import '../services/app_state_service.dart';
 import '../services/notification_service.dart';
 import '../services/tree_storage_service.dart';
+import '../services/site_file_service.dart';
 import '../widgets/collapsible_form_section.dart';
 import '../data/victorian_tree_species.dart';
 import 'package:geolocator/geolocator.dart';
@@ -15,17 +17,50 @@ import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'collapsible_form_section.dart';
 import 'tree_form_groups.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:record/record.dart';
+import 'package:image_picker/image_picker.dart';
+
+class ResponsiveHelper {
+  static double getScaleFactor(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    if (width < 600) return 0.8; // Small phones
+    if (width < 800) return 0.9; // Large phones
+    if (width < 1200) return 1.0; // Tablets
+    return 1.2; // Desktop
+  }
+  
+  static double getScaledValue(BuildContext context, double value) {
+    return value * getScaleFactor(context);
+  }
+  
+  static EdgeInsets getScaledPadding(BuildContext context, EdgeInsets padding) {
+    final scale = getScaleFactor(context);
+    return EdgeInsets.only(
+      left: padding.left * scale,
+      right: padding.right * scale,
+      top: padding.top * scale,
+      bottom: padding.bottom * scale,
+    );
+  }
+  
+  static double getScaledFontSize(BuildContext context, double fontSize) {
+    return fontSize * getScaleFactor(context);
+  }
+}
 
 class TreeForm extends StatefulWidget {
   final String siteId;
   final TreeEntry? initialEntry;
   final Function(TreeEntry) onSubmit;
+  final String? reportType;
 
   const TreeForm({
     super.key,
     required this.siteId,
     this.initialEntry,
     required this.onSubmit,
+    this.reportType,
   });
 
   @override
@@ -35,7 +70,20 @@ class TreeForm extends StatefulWidget {
 class _TreeFormState extends State<TreeForm> {
   final _formKey = GlobalKey<FormState>();
   final _audioPlayer = AudioPlayer();
-  // Audio recording not available on web
+  final _audioRecorder = AudioRecorder();
+  final _speechToText = stt.SpeechToText();
+  
+  // Voice recording state
+  bool _isRecording = false;
+  bool _hasRecording = false;
+  bool _isTranscribing = false;
+  String _transcriptionText = '';
+  String? _recordingPath;
+  bool _speechEnabled = false;
+  
+  // Image state
+  List<String> _imageLocalPaths = [];
+  List<String> _imageUrls = [];
   
   // Form controllers
   final _speciesController = TextEditingController();
@@ -245,6 +293,121 @@ class _TreeFormState extends State<TreeForm> {
   double _totalValuation = 0;
   DateTime? _valuationDate;
   
+  // Helper method to determine which groups are relevant for each report type
+  List<String> _getRelevantGroupsForReportType() {
+    final reportType = widget.reportType ?? 'PAA';
+    
+    switch (reportType) {
+      case 'PAA': // Preliminary Assessment
+        return ['photos', 'location', 'basic_data', 'health', 'structure'];
+      
+      case 'AIA': // Impact Assessment  
+        return ['photos', 'location', 'basic_data', 'health', 'structure', 'protection_zones', 'impact_assessment', 'retention_removal'];
+      
+      case 'TPMP': // Tree Protection Plan
+        return ['photos', 'location', 'basic_data', 'protection_zones', 'impact_assessment', 'management'];
+      
+      case 'TRA': // Tree Risk Assessment
+        return ['photos', 'location', 'basic_data', 'health', 'structure', 'vta', 'qtra', 'isa_risk', 'management'];
+      
+      case 'Condition': // Condition Assessment
+        return ['photos', 'voice_notes', 'location', 'basic_data', 'health', 'structure', 'vta', 'management'];
+      
+      case 'Removal': // Removal Application
+        return ['photos', 'location', 'basic_data', 'health', 'structure', 'development', 'retention_removal', 'valuation'];
+      
+      case 'Witness': // Expert Witness Report
+        return ['photos', 'voice_notes', 'location', 'basic_data', 'health', 'structure', 'vta', 'qtra', 'isa_risk', 'impact_assessment', 'development', 'retention_removal', 'valuation', 'management'];
+      
+      case 'PostDev': // Post-Development Monitoring
+        return ['photos', 'location', 'basic_data', 'health', 'structure', 'protection_zones', 'management'];
+      
+      case 'Vegetation': // Vegetation Assessment
+        return ['photos', 'location', 'basic_data', 'health', 'habitat', 'development', 'valuation'];
+      
+      default: // Show all groups for unknown types
+        return ['photos', 'voice_notes', 'location', 'basic_data', 'health', 'structure', 'vta', 'qtra', 'isa_risk', 'protection_zones', 'impact_assessment', 'development', 'retention_removal', 'management', 'habitat', 'valuation'];
+    }
+  }
+
+  Future<void> _syncPhotosToSiteFiles(TreeEntry tree) async {
+    if (_photoPaths.isEmpty) {
+      return;
+    }
+
+    try {
+      await SiteFileService.init();
+    } catch (_) {}
+
+    final sanitizedSpecies = (tree.species.isNotEmpty ? tree.species : 'Tree')
+        .replaceAll(RegExp(r'[^a-zA-Z0-9 _-]'), '')
+        .trim();
+    final folderPath = '/Photos/Tree ${tree.id}${sanitizedSpecies.isNotEmpty ? ' - $sanitizedSpecies' : ''}';
+
+    for (int i = 0; i < _photoPaths.length; i++) {
+      final source = _photoPaths[i];
+      final bytes = await _resolvePhotoBytes(source);
+      if (bytes == null || bytes.isEmpty) {
+        continue;
+      }
+
+      final extension = _inferPhotoExtension(source) ?? 'jpg';
+      final fileName = 'Tree_${tree.id}_${i + 1}.$extension';
+
+      final exists = await SiteFileService.fileExists(widget.siteId, fileName);
+      if (exists) {
+        continue;
+      }
+
+      await SiteFileService.saveFileFromBytes(
+        widget.siteId,
+        bytes,
+        fileName,
+        extension,
+        uploadedBy: 'Tree Form',
+        category: 'Photos',
+        folderPath: folderPath,
+      );
+    }
+  }
+
+  Future<Uint8List?> _resolvePhotoBytes(String source) async {
+    try {
+      if (source.startsWith('data:')) {
+        final base64Section = source.contains(',') ? source.split(',').last : '';
+        if (base64Section.isEmpty) {
+          return null;
+        }
+        return Uint8List.fromList(base64Decode(base64Section));
+      }
+
+      if (!kIsWeb) {
+        final file = File(source);
+        if (await file.exists()) {
+          return await file.readAsBytes();
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  String? _inferPhotoExtension(String source) {
+    if (source.startsWith('data:')) {
+      final start = source.indexOf('image/');
+      final end = source.indexOf(';');
+      if (start != -1 && end != -1 && end > start) {
+        return source.substring(start + 6, end);
+      }
+      return 'jpg';
+    }
+
+    final dotIndex = source.lastIndexOf('.');
+    if (dotIndex != -1 && dotIndex < source.length - 1) {
+      return source.substring(dotIndex + 1).toLowerCase();
+    }
+    return null;
+  }
+  
   // Phase 3 boolean fields - Ecological
   bool _hollowBearingTree = false;
   bool _nestingSites = false;
@@ -280,7 +443,7 @@ class _TreeFormState extends State<TreeForm> {
   List<String> _diagnosticImages = [];
   
   // Mobile-first features
-  bool _isRecording = false;
+  // bool _isRecording = false; // Already declared above
   bool _isOffline = false;
   bool _isLoadingLocation = false;
   List<String> _photoPaths = [];
@@ -301,6 +464,7 @@ class _TreeFormState extends State<TreeForm> {
     super.initState();
     _initializeForm();
     _checkConnectivity();
+    _initSpeech();
     _startConnectivityMonitoring();
     
     // Initialize species search - start with empty list
@@ -323,6 +487,130 @@ class _TreeFormState extends State<TreeForm> {
         }).toList();
       }
     });
+  }
+  
+  Future<void> _initSpeech() async {
+    _speechEnabled = await _speechToText.initialize();
+    setState(() {});
+  }
+  
+  // Voice recording methods
+  Future<void> _startRecording() async {
+    try {
+      if (await _audioRecorder.hasPermission()) {
+        final directory = await getApplicationDocumentsDirectory();
+        _recordingPath = '${directory.path}/tree_note_${DateTime.now().millisecondsSinceEpoch}.m4a';
+        
+        await _audioRecorder.start(
+          const RecordConfig(),
+          path: _recordingPath!,
+        );
+        
+        setState(() {
+          _isRecording = true;
+        });
+        
+        NotificationService.showInfo(context, 'Recording started...');
+      } else {
+        NotificationService.showError(context, 'Microphone permission denied');
+      }
+    } catch (e) {
+      NotificationService.showError(context, 'Failed to start recording: $e');
+    }
+  }
+  
+  Future<void> _stopRecording() async {
+    try {
+      final path = await _audioRecorder.stop();
+      if (path != null) {
+        setState(() {
+          _isRecording = false;
+          _hasRecording = true;
+          _recordingPath = path;
+        });
+        
+        // Start transcription
+        _transcribeAudio();
+        
+        NotificationService.showSuccess(context, 'Recording saved');
+      }
+    } catch (e) {
+      NotificationService.showError(context, 'Failed to stop recording: $e');
+    }
+  }
+  
+  Future<void> _transcribeAudio() async {
+    if (!_speechEnabled || _recordingPath == null) return;
+    
+    setState(() {
+      _isTranscribing = true;
+    });
+    
+    try {
+      // For web, we'll use the speech-to-text live listening instead
+      if (kIsWeb) {
+        // Start listening for speech
+        await _speechToText.listen(
+          onResult: (result) {
+            setState(() {
+              _transcriptionText = result.recognizedWords;
+            });
+          },
+        );
+        
+        // Stop after 30 seconds
+        Future.delayed(const Duration(seconds: 30), () {
+          _speechToText.stop();
+          setState(() {
+            _isTranscribing = false;
+          });
+        });
+      } else {
+        // On mobile, transcribe the recorded audio file
+        setState(() {
+          _transcriptionText = 'Transcription will appear here after processing...';
+          _isTranscribing = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _isTranscribing = false;
+      });
+      NotificationService.showError(context, 'Transcription failed: $e');
+    }
+  }
+  
+  Future<void> _playRecording() async {
+    if (_recordingPath == null) return;
+    
+    try {
+      await _audioPlayer.setFilePath(_recordingPath!);
+      await _audioPlayer.play();
+      NotificationService.showInfo(context, 'Playing recording...');
+    } catch (e) {
+      NotificationService.showError(context, 'Failed to play recording: $e');
+    }
+  }
+  
+  void _deleteRecording() {
+    setState(() {
+      _hasRecording = false;
+      _recordingPath = null;
+      _transcriptionText = '';
+    });
+    NotificationService.showInfo(context, 'Recording deleted');
+  }
+  
+  void _addTranscriptionToNotes() {
+    if (_transcriptionText.isNotEmpty) {
+      setState(() {
+        _notesController.text = _notesController.text.isEmpty
+            ? _transcriptionText
+            : '${_notesController.text}\n\n$_transcriptionText';
+        _transcriptionText = '';
+      });
+      NotificationService.showSuccess(context, 'Transcription added to notes');
+    }
   }
 
   @override
@@ -506,8 +794,18 @@ class _TreeFormState extends State<TreeForm> {
       _structuralRatingController.text = entry.structuralRating;
     } else {
       // Auto-numbering for new trees
-      final nextId = TreeStorageService.getNextTreeId(widget.siteId);
-      // The ID will be set when saving
+      _generateNextTreeId();
+    }
+  }
+
+  Future<void> _generateNextTreeId() async {
+    try {
+      // Tree ID will be generated when saving
+      final treeNumber = await TreeStorageService.getNextTreeNumber(widget.siteId);
+      // Just verify the counter is working
+      print('Next tree will be: Tree $treeNumber');
+    } catch (e) {
+      print('Error generating tree ID: $e');
     }
   }
 
@@ -605,7 +903,29 @@ class _TreeFormState extends State<TreeForm> {
           },
         );
       }
-      
+
+      // Handle base64 data URIs on web
+      if (imagePath.startsWith('data:') && kIsWeb) {
+        final uri = Uri.parse(imagePath);
+        final data = uri.data;
+        if (data != null) {
+          try {
+            final bytes = data.contentAsBytes();
+            return Image.memory(
+              bytes,
+              width: double.infinity,
+              height: double.infinity,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return _buildImagePlaceholder('Data Image Error');
+              },
+            );
+          } catch (e) {
+            return _buildImagePlaceholder('Invalid Image Data');
+          }
+        }
+      }
+
       // For web, we can't use File paths, so show a placeholder
       if (kIsWeb) {
         return _buildImagePlaceholder('Image: ${imagePath.split('/').last}');
@@ -661,14 +981,7 @@ class _TreeFormState extends State<TreeForm> {
       );
 
       if (photo != null) {
-        setState(() {
-          _photoPaths.add(photo.path);
-        });
-        
-        // Auto-upload if online
-        if (!_isOffline) {
-          _uploadPhoto(photo.path);
-        }
+        await _storePhotoFromXFile(photo);
       }
     } catch (e) {
       NotificationService.showError(context, 'Failed to take photo: $e');
@@ -684,19 +997,35 @@ class _TreeFormState extends State<TreeForm> {
       );
 
       if (images.isNotEmpty) {
-        setState(() {
-          _photoPaths.addAll(images.map((img) => img.path));
-        });
-        
-        // Auto-upload if online
-        if (!_isOffline) {
-          for (final image in images) {
-            _uploadPhoto(image.path);
-          }
+        for (final image in images) {
+          await _storePhotoFromXFile(image);
         }
       }
     } catch (e) {
       NotificationService.showError(context, 'Failed to pick photos: $e');
+    }
+  }
+
+  Future<void> _storePhotoFromXFile(XFile image) async {
+    try {
+      String storedValue;
+      if (kIsWeb) {
+        final bytes = await image.readAsBytes();
+        final base64Data = base64Encode(bytes);
+        storedValue = 'data:${image.mimeType ?? 'image/jpeg'};base64,$base64Data';
+      } else {
+        storedValue = image.path;
+      }
+
+      setState(() {
+        _photoPaths.add(storedValue);
+      });
+
+      if (!_isOffline && !kIsWeb) {
+        _uploadPhoto(image.path);
+      }
+    } catch (e) {
+      NotificationService.showError(context, 'Failed to process photo: $e');
     }
   }
 
@@ -727,58 +1056,20 @@ class _TreeFormState extends State<TreeForm> {
   }
 
 
-
-  // Voice notes functionality (web-compatible)
-  Future<void> _startRecording() async {
-    if (kIsWeb) {
-      NotificationService.showInfo(context, 'Voice recording not available on web');
-      return;
-    }
-    
-    try {
-      // Mobile voice recording implementation would go here
-      setState(() {
-        _isRecording = true;
-      });
-      NotificationService.showInfo(context, 'Voice recording started (mobile only)');
-    } catch (e) {
-      NotificationService.showError(context, 'Failed to start recording: $e');
-    }
-  }
-
-  Future<void> _stopRecording() async {
-    if (kIsWeb) return;
-    
-    try {
-      setState(() {
-        _isRecording = false;
-      });
-      NotificationService.showInfo(context, 'Voice recording stopped');
-    } catch (e) {
-      NotificationService.showError(context, 'Failed to stop recording: $e');
-    }
-  }
-
-  Future<void> _playVoiceNote(String path) async {
-    if (kIsWeb) {
-      NotificationService.showInfo(context, 'Voice playback not available on web');
-      return;
-    }
-    
-    try {
-      await _audioPlayer.setFilePath(path);
-      await _audioPlayer.play();
-    } catch (e) {
-      NotificationService.showError(context, 'Failed to play voice note: $e');
-    }
-  }
+  // Duplicate methods removed - using the ones defined earlier
 
   Future<void> _saveTree() async {
     if (!_formKey.currentState!.validate()) return;
 
     try {
+      // Use simple sequential numbering
+      String treeId = widget.initialEntry?.id ?? '';
+      if (treeId.isEmpty) {
+        final treeNumber = await TreeStorageService.getNextTreeNumber(widget.siteId);
+        treeId = 'Tree $treeNumber';
+      }
       final tree = TreeEntry(
-        id: widget.initialEntry?.id ?? TreeStorageService.getNextTreeId(widget.siteId),
+        id: treeId,
         species: _speciesController.text,
         dsh: double.parse(_dshController.text),
         height: double.parse(_heightController.text),
@@ -998,7 +1289,10 @@ class _TreeFormState extends State<TreeForm> {
       }
 
       widget.onSubmit(tree);
-      
+
+      // Persist captured photos to Files tab
+      await _syncPhotosToSiteFiles(tree);
+
       // Show success message with site preference info
       if (isFirstTreeOnSite) {
         NotificationService.showSuccess(
@@ -1103,7 +1397,7 @@ class _TreeFormState extends State<TreeForm> {
               icon: const Icon(Icons.delete, color: Colors.red),
               onPressed: () => setState(() => _voiceNotePaths.removeAt(index)),
             ),
-            onTap: () => _playVoiceNote(path),
+            onTap: () => _playRecording(),
           );
         })),
       if (_voiceNotePaths.isNotEmpty) const SizedBox(height: 12),
@@ -1271,6 +1565,135 @@ class _TreeFormState extends State<TreeForm> {
         controller: _commentsController,
         decoration: const InputDecoration(labelText: 'Comments', border: OutlineInputBorder()),
         maxLines: 3,
+      ),
+      const SizedBox(height: 16),
+      // Notes section with voice recording and transcription
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade300),
+          borderRadius: BorderRadius.circular(8),
+          color: Colors.grey.shade50,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.notes, color: Colors.green),
+                const SizedBox(width: 8),
+                const Text(
+                  'Notes & Voice Recording',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                if (_isRecording)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: const [
+                        Icon(Icons.fiber_manual_record, color: Colors.white, size: 12),
+                        SizedBox(width: 4),
+                        Text('Recording', style: TextStyle(color: Colors.white, fontSize: 12)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _notesController,
+              decoration: const InputDecoration(
+                labelText: 'Notes',
+                hintText: 'Enter detailed notes about this tree...',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 5,
+              minLines: 3,
+            ),
+            const SizedBox(height: 12),
+            // Voice recording controls
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isRecording ? _stopRecording : _startRecording,
+                    icon: Icon(_isRecording ? Icons.stop : Icons.mic),
+                    label: Text(_isRecording ? 'Stop Recording' : 'Start Voice Recording'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _isRecording ? Colors.red : Colors.blue,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+                if (_hasRecording) ...[
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: _playRecording,
+                    icon: const Icon(Icons.play_arrow),
+                    tooltip: 'Play Recording',
+                    color: Colors.green,
+                  ),
+                  IconButton(
+                    onPressed: _deleteRecording,
+                    icon: const Icon(Icons.delete),
+                    tooltip: 'Delete Recording',
+                    color: Colors.red,
+                  ),
+                ],
+              ],
+            ),
+            if (_isTranscribing)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: LinearProgressIndicator(),
+              ),
+            if (_transcriptionText.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.transcribe, size: 16, color: Colors.blue),
+                        const SizedBox(width: 4),
+                        const Text(
+                          'Transcription:',
+                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                        ),
+                        const Spacer(),
+                        TextButton.icon(
+                          onPressed: _addTranscriptionToNotes,
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('Add to Notes'),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _transcriptionText,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     ];
   }
@@ -2268,6 +2691,310 @@ class _TreeFormState extends State<TreeForm> {
         style: const TextStyle(fontSize: 14)),
     ];
   }
+  
+  // Duplicate _buildPhotosContent removed - using the one defined earlier
+  /*List<Widget> _buildPhotosContent() {
+    return [
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade300),
+          borderRadius: BorderRadius.circular(8),
+          color: Colors.grey.shade50,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.photo_camera, color: Colors.blue),
+                const SizedBox(width: 8),
+                const Text(
+                  'Tree Photos',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Text(
+                  '${_imageLocalPaths.length}/4 photos',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Add up to 4 photos for the report:',
+              style: TextStyle(fontSize: 14, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            // Photo categories for reports
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildPhotoButton('Canopy View', Icons.park, 0),
+                _buildPhotoButton('Base/Trunk', Icons.nature, 1),
+                _buildPhotoButton('Context/Site', Icons.landscape, 2),
+                _buildPhotoButton('Defects/Issues', Icons.warning, 3),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Display selected images
+            if (_imageLocalPaths.isNotEmpty) ...[
+              const Divider(),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 100,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _imageLocalPaths.length,
+                  itemBuilder: (context, index) {
+                    return Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      width: 100,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: kIsWeb
+                                ? Image.network(
+                                    _imageLocalPaths[index],
+                                    fit: BoxFit.cover,
+                                    width: 100,
+                                    height: 100,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Container(
+                                        color: Colors.grey.shade200,
+                                        child: const Icon(Icons.image, color: Colors.grey),
+                                      );
+                                    },
+                                  )
+                                : Image.file(
+                                    File(_imageLocalPaths[index]),
+                                    fit: BoxFit.cover,
+                                    width: 100,
+                                    height: 100,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return Container(
+                                        color: Colors.grey.shade200,
+                                        child: const Icon(Icons.image, color: Colors.grey),
+                                      );
+                                    },
+                                  ),
+                          ),
+                          Positioned(
+                            top: 4,
+                            right: 4,
+                            child: GestureDetector(
+                              onTap: () => _removeImage(index),
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: Colors.red,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.close,
+                                  size: 16,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ];
+  }*/
+  
+  // Duplicate _buildPhotoButton removed - using the one defined earlier
+  /*Widget _buildPhotoButton(String label, IconData icon, int index) {
+    final hasPhoto = _imageLocalPaths.length > index;
+    return ElevatedButton.icon(
+      onPressed: () => _pickImage(index),
+      icon: Icon(hasPhoto ? Icons.check_circle : icon, size: 20),
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: hasPhoto ? Colors.green : Colors.blue,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
+    );
+  }*/
+  
+  /*Future<void> _pickImage(int index) async {
+    try {
+      final ImagePicker picker = ImagePicker();
+      final XFile? image = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1920,
+        maxHeight: 1080,
+        imageQuality: 85,
+      );
+      
+      if (image != null) {
+        setState(() {
+          if (index < _imageLocalPaths.length) {
+            _imageLocalPaths[index] = image.path;
+          } else {
+            _imageLocalPaths.add(image.path);
+          }
+        });
+        NotificationService.showSuccess(context, 'Photo added successfully');
+      }
+    } catch (e) {
+      NotificationService.showError(context, 'Failed to pick image: $e');
+    }
+  }*/
+  
+  /*void _removeImage(int index) {
+    setState(() {
+      _imageLocalPaths.removeAt(index);
+    });
+  }*/
+  
+  /*List<Widget> _buildVoiceNotesContent() {
+    // Return the voice notes section we already built
+    return [
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade300),
+          borderRadius: BorderRadius.circular(8),
+          color: Colors.grey.shade50,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.notes, color: Colors.green),
+                const SizedBox(width: 8),
+                const Text(
+                  'Notes & Voice Recording',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                if (_isRecording)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: const [
+                        Icon(Icons.fiber_manual_record, color: Colors.white, size: 12),
+                        SizedBox(width: 4),
+                        Text('Recording', style: TextStyle(color: Colors.white, fontSize: 12)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _notesController,
+              decoration: const InputDecoration(
+                labelText: 'Notes',
+                hintText: 'Enter detailed notes about this tree...',
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 5,
+              minLines: 3,
+            ),
+            const SizedBox(height: 12),
+            // Voice recording controls
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isRecording ? _stopRecording : _startRecording,
+                    icon: Icon(_isRecording ? Icons.stop : Icons.mic),
+                    label: Text(_isRecording ? 'Stop Recording' : 'Start Voice Recording'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _isRecording ? Colors.red : Colors.blue,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+                if (_hasRecording) ...[
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: _playRecording,
+                    icon: const Icon(Icons.play_arrow),
+                    tooltip: 'Play Recording',
+                    color: Colors.green,
+                  ),
+                  IconButton(
+                    onPressed: _deleteRecording,
+                    icon: const Icon(Icons.delete),
+                    tooltip: 'Delete Recording',
+                    color: Colors.red,
+                  ),
+                ],
+              ],
+            ),
+            if (_isTranscribing)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: LinearProgressIndicator(),
+              ),
+            if (_transcriptionText.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.transcribe, size: 16, color: Colors.blue),
+                        const SizedBox(width: 4),
+                        const Text(
+                          'Transcription:',
+                          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                        ),
+                        const Spacer(),
+                        TextButton.icon(
+                          onPressed: _addTranscriptionToNotes,
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('Add to Notes'),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _transcriptionText,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ];
+  }*/
 
   List<Widget> _buildPlaceholder(String title) {
     return [
@@ -2340,7 +3067,7 @@ class _TreeFormState extends State<TreeForm> {
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: ResponsiveHelper.getScaledPadding(context, const EdgeInsets.all(16)),
           children: [
             // Show info banner if using site preferences
             if (widget.initialEntry == null && 
@@ -2348,8 +3075,8 @@ class _TreeFormState extends State<TreeForm> {
                 widget.siteId!.isNotEmpty &&
                 AppStateService.hasSitePreferences(widget.siteId!))
               Container(
-                margin: const EdgeInsets.only(bottom: 16),
-                padding: const EdgeInsets.all(12),
+                margin: EdgeInsets.only(bottom: ResponsiveHelper.getScaledValue(context, 16)),
+                padding: ResponsiveHelper.getScaledPadding(context, const EdgeInsets.all(12)),
                 decoration: BoxDecoration(
                   color: Colors.blue.shade50,
                   border: Border.all(color: Colors.blue.shade200),
@@ -2357,14 +3084,14 @@ class _TreeFormState extends State<TreeForm> {
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
-                    const SizedBox(width: 8),
+                    Icon(Icons.info_outline, color: Colors.blue.shade700, size: ResponsiveHelper.getScaledValue(context, 20)),
+                    SizedBox(width: ResponsiveHelper.getScaledValue(context, 8)),
                     Expanded(
                       child: Text(
                         'Using export preferences from previous trees on this site',
                         style: TextStyle(
                           color: Colors.blue.shade900,
-                          fontSize: 13,
+                          fontSize: ResponsiveHelper.getScaledFontSize(context, 13),
                         ),
                       ),
                     ),
@@ -2380,6 +3107,7 @@ class _TreeFormState extends State<TreeForm> {
               onExpandToggle: (key) {
                 setState(() => _expandedGroups[key] = !_expandedGroups[key]!);
               },
+              relevantGroups: _getRelevantGroupsForReportType(), // Filter based on report type
               groupContent: {
                 'photos': _buildPhotosContent(),
                 'voice_notes': _buildVoiceNotesContent(),
@@ -2403,18 +3131,21 @@ class _TreeFormState extends State<TreeForm> {
                 'inspector_details': _buildInspectorContent(),
               },
             ),
-            const SizedBox(height: 32),
+            SizedBox(height: ResponsiveHelper.getScaledValue(context, 32)),
             // Save button
             ElevatedButton(
               onPressed: _saveTree,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
+                padding: ResponsiveHelper.getScaledPadding(context, const EdgeInsets.symmetric(vertical: 16)),
               ),
-              child: const Text(
+              child: Text(
                 'Save Tree',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  fontSize: ResponsiveHelper.getScaledFontSize(context, 18), 
+                  fontWeight: FontWeight.bold
+                ),
               ),
             ),
           ],

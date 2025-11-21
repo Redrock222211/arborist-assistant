@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:hive/hive.dart';
 
 part 'site_file.g.dart';
@@ -43,6 +46,15 @@ class SiteFile extends HiveObject {
   @HiveField(12)
   bool isSynced;
 
+  @HiveField(13)
+  Uint8List? fileBytes;
+
+  @HiveField(14)
+  String folderPath;
+
+  @HiveField(15)
+  bool isFolder;
+
   SiteFile({
     required this.id,
     required this.siteId,
@@ -57,6 +69,9 @@ class SiteFile extends HiveObject {
     this.description = '',
     this.category = 'General',
     this.isSynced = false,
+    this.fileBytes,
+    this.folderPath = '/',
+    this.isFolder = false,
   });
 
   Map<String, dynamic> toMap() {
@@ -74,6 +89,9 @@ class SiteFile extends HiveObject {
       'description': description,
       'category': category,
       'isSynced': isSynced,
+      'fileBytes': fileBytes != null ? base64Encode(fileBytes!) : null,
+      'folderPath': folderPath,
+      'isFolder': isFolder,
     };
   }
 
@@ -92,6 +110,9 @@ class SiteFile extends HiveObject {
       description: map['description'] ?? '',
       category: map['category'] ?? 'General',
       isSynced: map['isSynced'] ?? false,
+      fileBytes: map['fileBytes'] != null ? base64Decode(map['fileBytes']) : null,
+      folderPath: map['folderPath'] ?? '/',
+      isFolder: map['isFolder'] ?? false,
     );
   }
 
@@ -109,6 +130,9 @@ class SiteFile extends HiveObject {
     String? description,
     String? category,
     bool? isSynced,
+    Uint8List? fileBytes,
+    String? folderPath,
+    bool? isFolder,
   }) {
     return SiteFile(
       id: id ?? this.id,
@@ -124,6 +148,9 @@ class SiteFile extends HiveObject {
       description: description ?? this.description,
       category: category ?? this.category,
       isSynced: isSynced ?? this.isSynced,
+      fileBytes: fileBytes ?? this.fileBytes,
+      folderPath: folderPath ?? this.folderPath,
+      isFolder: isFolder ?? this.isFolder,
     );
   }
 }

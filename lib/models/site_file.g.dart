@@ -30,13 +30,16 @@ class SiteFileAdapter extends TypeAdapter<SiteFile> {
       description: fields[10] as String,
       category: fields[11] as String,
       isSynced: fields[12] as bool,
+      fileBytes: fields[13] as Uint8List?,
+      folderPath: fields[14] as String,
+      isFolder: fields[15] as bool,
     );
   }
 
   @override
   void write(BinaryWriter writer, SiteFile obj) {
     writer
-      ..writeByte(13)
+      ..writeByte(16)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -62,7 +65,13 @@ class SiteFileAdapter extends TypeAdapter<SiteFile> {
       ..writeByte(11)
       ..write(obj.category)
       ..writeByte(12)
-      ..write(obj.isSynced);
+      ..write(obj.isSynced)
+      ..writeByte(13)
+      ..write(obj.fileBytes)
+      ..writeByte(14)
+      ..write(obj.folderPath)
+      ..writeByte(15)
+      ..write(obj.isFolder);
   }
 
   @override

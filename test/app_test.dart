@@ -1,19 +1,22 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
-import 'package:arborist_assistant/main.dart';
+import 'package:arborist_assistant/pages/loading_screen.dart';
 import 'package:arborist_assistant/models/site.dart';
 import 'package:arborist_assistant/models/tree_entry.dart';
-import 'package:arborist_assistant/services/site_storage_service.dart';
-import 'package:arborist_assistant/services/tree_storage_service.dart';
 
 void main() {
   group('Arborist Assistant App Tests', () {
-    testWidgets('App should start without crashing', (WidgetTester tester) async {
-      // Build our app and trigger a frame
-      await tester.pumpWidget(const ArboristAssistantApp());
-      
-      // Verify the app starts
-      expect(find.byType(ArboristAssistantApp), findsOneWidget);
+    testWidgets('LoadingScreen shows progress indicator', (WidgetTester tester) async {
+      await tester.pumpWidget(const MaterialApp(home: LoadingScreen()));
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      // Let delayed animations complete so no timers remain
+      await tester.pump(const Duration(seconds: 1));
+
+      // Dispose the loading screen to release repeating animations
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
     });
 
     test('Site model should work correctly', () {

@@ -8,7 +8,7 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'pages/map_page.dart';
 import 'pages/tree_list_page.dart';
-// Drawing feature removed - import 'pages/simple_drawing_page_minimal.dart';
+import 'pages/drawing_page.dart';
 import 'pages/site_files_page.dart';
 import 'pages/export_sync_page.dart';
 import 'pages/profile_page.dart';
@@ -26,6 +26,7 @@ import 'services/firebase_service.dart';
 import 'services/site_file_service.dart';
 import 'services/drawing_storage_service.dart';
 import 'services/planning_ai_service.dart';
+import 'services/subscription_service.dart';
 // Removed unused import
 import 'widgets/app_logo.dart';
 import 'models/site.dart';
@@ -71,6 +72,9 @@ void main() async {
   await FirebaseService.init();
   await SiteFileService.init();
   await DrawingStorageService.init();
+  
+  // Initialize subscription service
+  await SubscriptionService.initialize();
   
   // Initialize Hive boxes for app settings
   await Hive.openBox('app_settings');
@@ -210,19 +214,23 @@ class _ArboristMainAppState extends State<ArboristMainApp> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = _selectedSite != null ? [
-      const DashboardPage(),
-      MapPage(site: _selectedSite!),
-      TreeListPage(site: _selectedSite!),
-      SiteFilesPage(site: _selectedSite!),
-      ExportSyncPage(site: _selectedSite!),
-    ] : [
-      const DashboardPage(),
-      const Center(child: Text('Select a site to view map')),
-      const Center(child: Text('Select a site to view trees')),
-      const Center(child: Text('Select a site to access files')),
-      const Center(child: Text('Select a site to export data')),
-    ];
+    final pages = _selectedSite != null
+        ? [
+            const DashboardPage(),
+            MapPage(site: _selectedSite!),
+            TreeListPage(site: _selectedSite!),
+            DrawingPage(site: _selectedSite!),
+            SiteFilesPage(site: _selectedSite!),
+            ExportSyncPage(site: _selectedSite!),
+          ]
+        : [
+            const DashboardPage(),
+            const Center(child: Text('Select a site to view map')),
+            const Center(child: Text('Select a site to view trees')),
+            const Center(child: Text('Select a site to open drawing tools')),
+            const Center(child: Text('Select a site to access files')),
+            const Center(child: Text('Select a site to export data')),
+          ];
     return Scaffold(
       appBar: AppBar(
         title: Text('Arborist Assistant - ${_selectedSite?.name ?? "No Site"}'),
@@ -318,33 +326,37 @@ class _ArboristMainAppState extends State<ArboristMainApp> {
       ),
       body: pages[_selectedTab],
       bottomNavigationBar: BottomNavigationBar(
-              items: const <BottomNavigationBarItem>[
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.dashboard),
-                  label: 'Dashboard',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.map),
-                  label: 'Map',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.list),
-                  label: 'Tree List',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.folder),
-                  label: 'Files',
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.sync),
-                  label: 'Export/Sync',
-                ),
-              ],
-              currentIndex: _selectedTab,
-              selectedItemColor: Colors.green[700],
-              onTap: (index) => setState(() => _selectedTab = index),
-              type: BottomNavigationBarType.fixed,
-            ),
+        items: const <BottomNavigationBarItem>[
+          BottomNavigationBarItem(
+            icon: Icon(Icons.dashboard),
+            label: 'Dashboard',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.map),
+            label: 'Map',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.list),
+            label: 'Tree List',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.brush),
+            label: 'Drawing',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.folder),
+            label: 'Files',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.sync),
+            label: 'Export/Sync',
+          ),
+        ],
+        currentIndex: _selectedTab,
+        selectedItemColor: Colors.green[700],
+        onTap: (index) => setState(() => _selectedTab = index),
+        type: BottomNavigationBarType.fixed,
+      ),
     );
   }
 }

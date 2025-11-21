@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:arborist_assistant/models/site.dart';
 import 'package:arborist_assistant/models/tree_entry.dart';
 import 'package:arborist_assistant/services/app_state_service.dart';
 import 'package:arborist_assistant/services/site_storage_service.dart';
 import 'package:arborist_assistant/pages/map_page.dart';
 import 'package:arborist_assistant/pages/tree_list_page.dart';
-import 'package:arborist_assistant/pages/tree_layout_map_page.dart';
+import 'package:arborist_assistant/pages/drawing_page.dart';
 import 'package:arborist_assistant/pages/site_files_page.dart';
+import 'package:arborist_assistant/pages/tree_layout_map_page.dart';
+import 'package:arborist_assistant/pages/export_sync_page.dart';
 import 'package:arborist_assistant/pages/dashboard_page.dart';
 import 'package:arborist_assistant/pages/simple_working_dialog.dart';
 import 'package:arborist_assistant/services/real_planning_service.dart';
@@ -15,7 +18,7 @@ import 'package:arborist_assistant/services/vicplan_service.dart';
 import 'package:arborist_assistant/services/regulatory_data_service.dart';
 import 'package:arborist_assistant/models/lga_tree_law.dart';
 import 'package:arborist_assistant/models/overlay_tree_requirement.dart';
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
 
 class SiteMainPage extends StatefulWidget {
   final Site site;
@@ -91,41 +94,34 @@ class _SiteMainPageState extends State<SiteMainPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Create tree data for the drawing page - these represent existing trees on the site
-    // Using the site coordinates as a base, but you can modify these to match your actual tree locations
-    final mapTrees = [
-      {
-        'id': 'existing_tree_1',
-        'species': 'Oak',
-        'dsh': 45.0,
-        'height': 15.0,
-        'latitude': (widget.site.latitude ?? -37.8136) + 0.0005, // Offset from site center
-        'longitude': (widget.site.longitude ?? 144.9631) + 0.0005,
-      },
-    ];
-
     final pages = [
       MapPage(site: widget.site),
       TreeListPage(site: widget.site),
+      DrawingPage(site: widget.site),
+      SiteFilesPage(site: widget.site),
       TreeLayoutMapPage(site: widget.site), // Professional site map for reports
       _buildSiteDetailsTab(),
-      SiteFilesPage(site: widget.site),
+      ExportSyncPage(site: widget.site), // Reports tab with export functionality
     ];
 
     final tabLabels = [
       'Map',
       'Trees',
+      'Drawing',
+      'Files',
       'Site Map',
       'Details',
-      'Files',
+      'Reports',
     ];
 
     final tabIcons = [
       Icons.map,
       Icons.forest,
+      Icons.brush,
+      Icons.folder,
       Icons.location_on,
       Icons.info,
-      Icons.folder,
+      Icons.assessment,
     ];
 
     return Scaffold(
@@ -281,7 +277,7 @@ class _SiteMainPageState extends State<SiteMainPage> {
                 title: 'Site Report',
                 subtitle: 'Generate site assessment report',
                 onTap: () {
-                  setState(() => _selectedTab = 4); // Go to Export tab
+                  setState(() => _selectedTab = 5); // Go to Export tab
                   setState(() => _isSidebarOpen = false);
                 },
                 color: Colors.orange,
@@ -576,7 +572,7 @@ class _SiteDetailsPageState extends State<SiteDetailsPage> {
                     if (_treeLaw!.localLawsPageUrl.isNotEmpty) ...[
                       const SizedBox(height: 12),
                       TextButton.icon(
-                        onPressed: () => html.window.open(_treeLaw!.localLawsPageUrl, '_blank'),
+                        onPressed: () async => await openUrlInBrowser(_treeLaw!.localLawsPageUrl),
                         icon: const Icon(Icons.open_in_new),
                         label: const Text('View Council Website'),
                         style: TextButton.styleFrom(
@@ -726,27 +722,6 @@ class _SiteDetailsPageState extends State<SiteDetailsPage> {
                 )),
               ],
 
-              // AI-Generated Permit Summary (Supplementary)
-              if (widget.site.vicPlanData!['aiSummary'] != null && widget.site.vicPlanData!['aiSummary'].toString().isNotEmpty)
-                _buildInfoCard(
-                  title: 'AI-Generated Permit Requirements',
-                  icon: Icons.psychology,
-                  color: Colors.purple,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.purple.withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.purple.withOpacity(0.2)),
-                      ),
-                      child: Text(
-                        widget.site.vicPlanData!['aiSummary'],
-                        style: TextStyle(fontSize: 13, color: Colors.grey[800], height: 1.5),
-                      ),
-                    ),
-                  ],
-                ),
               const SizedBox(height: 16),
 
               // BMO Warning (if present)
@@ -993,17 +968,8 @@ class _SiteDetailsPageState extends State<SiteDetailsPage> {
         };
       }).toList() ?? [];
       
-      // Generate AI summaries
-      String aiSummary = '';
+      // LGA local laws only (no AI summary)
       String lgaLocalLaws = '';
-      
-      if (overlays.isNotEmpty || zones.isNotEmpty) {
-        aiSummary = await PlanningAIService.generatePermitSummary(
-          lga: lgaName,
-          overlays: overlays,
-          zones: zones,
-        ).timeout(const Duration(seconds: 20));
-      }
       
       lgaLocalLaws = await PlanningAIService.generateLGALocalLaws(
         lga: lgaName,
@@ -1018,7 +984,6 @@ class _SiteDetailsPageState extends State<SiteDetailsPage> {
         'lgaLocalLaws': lgaLocalLaws,
         'overlays': overlays,
         'zones': zones,
-        'aiSummary': aiSummary,
         'data_source': 'Vicmap Planning (Overlays=2, Zones=3) + Vicmap_Admin LGA (9)',
       };
       
@@ -1185,14 +1150,10 @@ class _SiteDetailsPageState extends State<SiteDetailsPage> {
     );
   }
 
-  void _downloadAsText(BuildContext context, String content) {
+  Future<void> _downloadAsText(BuildContext context, String content) async {
     // For web, create a downloadable text file
-    final blob = html.Blob([content], 'text/plain');
-    final url = html.Url.createObjectUrlFromBlob(blob);
-    final anchor = html.AnchorElement(href: url)
-      ..setAttribute('download', '${widget.site.name}_Site_Details.txt')
-      ..click();
-    html.Url.revokeObjectUrl(url);
+    final bytes = utf8.encode(content);
+    await downloadFile(bytes, 'site_details.txt', 'text/plain');
     
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Site details downloaded!')),

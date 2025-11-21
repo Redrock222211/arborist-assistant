@@ -16,12 +16,20 @@ class DrawingStorageService {
       List<Map<String, dynamic>> actions,
       Map<String, dynamic>? overlay,
       List<Map<String, dynamic>> layers) async {
+    if (!Hive.isBoxOpen(boxName)) {
+      return;
+    }
     final box = Hive.box(boxName);
-    await box.put(siteId,
-        jsonEncode({'actions': actions, 'overlay': overlay, 'layers': layers}));
+    await box.put(
+      siteId,
+      jsonEncode({'actions': actions, 'overlay': overlay, 'layers': layers}),
+    );
   }
 
   static Future<Map<String, dynamic>?> loadDrawing(String siteId) async {
+    if (!Hive.isBoxOpen(boxName)) {
+      return null;
+    }
     final box = Hive.box(boxName);
     final data = box.get(siteId);
     if (data == null) return null;
@@ -29,6 +37,9 @@ class DrawingStorageService {
   }
 
   static Future<void> clearDrawing(String siteId) async {
+    if (!Hive.isBoxOpen(boxName)) {
+      return;
+    }
     final box = Hive.box(boxName);
     await box.delete(siteId);
   }

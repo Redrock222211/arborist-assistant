@@ -1,5 +1,6 @@
 import 'package:hive/hive.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'report_type.dart';
 part 'site.g.dart';
 
 @HiveType(typeId: 1)
@@ -22,6 +23,8 @@ class Site {
   final double? longitude;
   @HiveField(8)
   final Map<String, dynamic>? vicPlanData;
+  @HiveField(9)
+  final String reportType;
 
   Site({
     required this.id,
@@ -33,7 +36,11 @@ class Site {
     this.latitude,
     this.longitude,
     this.vicPlanData,
+    this.reportType = 'PAA',
   }) : createdAt = createdAt ?? DateTime.now();
+
+  /// Get the ReportType enum from the stored string
+  ReportType get reportTypeEnum => reportTypeFromCode(reportType);
 
   Map<String, dynamic> toMap() {
     return {
@@ -46,6 +53,7 @@ class Site {
       'latitude': latitude,
       'longitude': longitude,
       'vicPlanData': vicPlanData,
+      'reportType': reportType,
     };
   }
 
@@ -60,6 +68,7 @@ class Site {
       latitude: map['latitude']?.toDouble(),
       longitude: map['longitude']?.toDouble(),
       vicPlanData: map['vicPlanData'],
+      reportType: map['reportType'] ?? 'PAA',
     );
   }
 
@@ -75,6 +84,7 @@ class Site {
       'latitude': latitude,
       'longitude': longitude,
       'vicPlanData': vicPlanData,
+      'reportType': reportType,
     };
   }
 
@@ -91,6 +101,7 @@ class Site {
       latitude: data['latitude']?.toDouble(),
       longitude: data['longitude']?.toDouble(),
       vicPlanData: data['vicPlanData'],
+      reportType: data['reportType'] ?? 'PAA',
     );
   }
 }

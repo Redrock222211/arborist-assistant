@@ -26,13 +26,14 @@ class SiteAdapter extends TypeAdapter<Site> {
       latitude: fields[6] as double?,
       longitude: fields[7] as double?,
       vicPlanData: (fields[8] as Map?)?.cast<String, dynamic>(),
+      reportType: fields[9] as String,
     );
   }
 
   @override
   void write(BinaryWriter writer, Site obj) {
     writer
-      ..writeByte(9)
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -50,7 +51,9 @@ class SiteAdapter extends TypeAdapter<Site> {
       ..writeByte(7)
       ..write(obj.longitude)
       ..writeByte(8)
-      ..write(obj.vicPlanData);
+      ..write(obj.vicPlanData)
+      ..writeByte(9)
+      ..write(obj.reportType);
   }
 
   @override

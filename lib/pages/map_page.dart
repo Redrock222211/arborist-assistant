@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/tree_entry.dart';
 import '../models/site.dart';
 import '../widgets/tree_form.dart';
+import 'report_type_selector.dart';
 import '../services/tree_storage_service.dart';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
@@ -19,7 +19,6 @@ import 'package:just_audio/just_audio.dart';
 import 'package:geolocator/geolocator.dart';
 import '../widgets/tree_image_gallery.dart';
 import '../services/app_state_service.dart';
-import '../services/map_export_service.dart';
 import '../pages/isa_report_page.dart';
 import '../services/notification_service.dart';
 import '../pages/tree_list_page.dart';
@@ -55,7 +54,9 @@ class _MapPageState extends State<MapPage> {
   bool _satelliteView = true;
   bool _mapReady = false;
   bool _locating = false;
-  // Removed unused fields
+  bool _trackingGPS = false;  // GPS tracking mode
+  Position? _currentPosition;  // Current GPS position
+  StreamSubscription<Position>? _positionStream;  // GPS position stream
   Timer? _updateTimer;
 
   // Search and filter
@@ -66,9 +67,8 @@ class _MapPageState extends State<MapPage> {
   double _filterMinHeight = 0;
   double _filterMaxHeight = 100;
 
-  final GlobalKey _mapKey = GlobalKey();
-  int _mapRefreshCounter = 0;
   final MapController _mapController = MapController();
+  int _mapRefreshCounter = 0;
   StreamSubscription<MapEvent>? _mapMoveSub;
 
   // Default center (generic coordinates)
@@ -86,14 +86,15 @@ class _MapPageState extends State<MapPage> {
     _loadTrees();
     _loadCircleVisibility();
     _updateSpeciesOptions();
+    _checkLocationPermission();  // Check GPS permission on init
 
     // Persist map view on move end
     _mapMoveSub = _mapController.mapEventStream.listen((event) {
       if (event is MapEventMoveEnd) {
         try {
-          final center = _mapController.center;
-          final zoom = _mapController.zoom;
-          AppStateService.saveMapPosition(center, zoom);
+          //           final center = _mapController.center;
+          //           final zoom = _mapController.zoom;
+          //           AppStateService.saveMapPosition(center, zoom);
         } catch (_) {}
       }
     });
@@ -118,12 +119,10 @@ class _MapPageState extends State<MapPage> {
 
   @override
   void dispose() {
-    _updateTimer?.cancel();
     _searchController.dispose();
-    // Clear caches to free memory
-    _srzCircleCache.clear();
-    _nrzCircleCache.clear();
+    _updateTimer?.cancel();
     _mapMoveSub?.cancel();
+    _positionStream?.cancel();  // Cancel GPS tracking
     super.dispose();
   }
 
@@ -489,6 +488,7 @@ class _MapPageState extends State<MapPage> {
                             child: TreeForm(
                               siteId: widget.site.id,
                               initialEntry: entry,
+                              reportType: widget.site.reportType,
                               onSubmit: (updatedEntry) async {
                                 final box = Hive.box<TreeEntry>(TreeStorageService.boxName);
                                 final key = box.keys.firstWhere((k) => box.get(k) == entry, orElse: () => null);
@@ -665,39 +665,40 @@ class _MapPageState extends State<MapPage> {
               if (_srzCircleCache.containsKey(cacheKey)) {
                 srzCircle = _srzCircleCache[cacheKey]!;
               } else {
-                // Convert meters to pixels for accurate display - this is critical for true scale
-                final srzRadius = _metersToPixels(entry.srz);
+                // SRZ is already in meters, use directly
                 srzCircle = CircleMarker(
                   point: LatLng(entry.latitude, entry.longitude),
-                  color: Colors.red.withValues(alpha: 0.1), // SRZ should be RED
-                  borderStrokeWidth: 2.0, // Thicker border for better visibility
-                  borderColor: Colors.red.withValues(alpha: 0.8),
-                  radius: srzRadius,
+                  color: Colors.red.withValues(alpha: 0.0), // Transparent fill for hatching effect
+                  borderStrokeWidth: 3.0, // Thicker border
+                  borderColor: Colors.red,
+                  radius: entry.srz, // Use meters directly
+                  useRadiusInMeter: true, // This ensures proper meter scaling
                 );
                 _srzCircleCache[cacheKey] = srzCircle;
               }
               newSrzCircles.add(srzCircle);
             }
             
+            // TPZ (Tree Protection Zone) - was labeled as NRZ
             if (_showNRZ && entry.nrz > 0) {
-              final cacheKey = 'nrz_${entry.id}_${entry.nrz}_${_mapController.camera.zoom?.toStringAsFixed(1)}';
-              CircleMarker nrzCircle;
+              final cacheKey = 'tpz_${entry.id}_${entry.nrz}_${_mapController.camera.zoom?.toStringAsFixed(1)}';
+              CircleMarker tpzCircle;
               
               if (_nrzCircleCache.containsKey(cacheKey)) {
-                nrzCircle = _nrzCircleCache[cacheKey]!;
+                tpzCircle = _nrzCircleCache[cacheKey]!;
               } else {
-                // Convert meters to pixels for accurate display - this is critical for true scale
-                final nrzRadius = _metersToPixels(entry.nrz);
-                nrzCircle = CircleMarker(
+                // TPZ (nrz) is already in meters, use directly
+                tpzCircle = CircleMarker(
                   point: LatLng(entry.latitude, entry.longitude),
-                  color: Colors.green.withValues(alpha: 0.08), // Slightly more visible
-                  borderStrokeWidth: 2.0, // Thicker border for better visibility
-                  borderColor: Colors.green.withValues(alpha: 0.7),
-                  radius: nrzRadius,
+                  color: Colors.green.withValues(alpha: 0.0), // Transparent fill for hatching effect
+                  borderStrokeWidth: 3.0, // Thicker border
+                  borderColor: Colors.green,
+                  radius: entry.nrz, // Use meters directly
+                  useRadiusInMeter: true, // This ensures proper meter scaling
                 );
-                _nrzCircleCache[cacheKey] = nrzCircle;
+                _nrzCircleCache[cacheKey] = tpzCircle;
               }
-              newNrzCircles.add(nrzCircle);
+              newNrzCircles.add(tpzCircle);
             }
         }
       }
@@ -772,11 +773,16 @@ class _MapPageState extends State<MapPage> {
       position ??= await Geolocator.getLastKnownPosition();
 
       if (position != null) {
-        // Move map to current location
-        _mapController.move(
-          LatLng(position.latitude, position.longitude),
-          16.0,
-        );
+        final target = LatLng(position.latitude, position.longitude);
+        const double targetZoom = 18.0;
+        // Update cached center/zoom for consistency with other map rebuilds
+        if (mounted) {
+          setState(() {
+            _center = target;
+            _zoom = targetZoom;
+          });
+        }
+        _mapController.move(target, targetZoom);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Moved to your location: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}')),
         );
@@ -806,6 +812,135 @@ class _MapPageState extends State<MapPage> {
         SnackBar(content: Text('Error getting location: $e')),
       );
       if (mounted) setState(() => _locating = false);
+    }
+  }
+
+  // Check location permission on startup
+  Future<void> _checkLocationPermission() async {
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        // Don't request automatically, let user trigger it
+        return;
+      }
+    } catch (e) {
+      print('Error checking location permission: $e');
+    }
+  }
+
+  // Toggle GPS tracking mode
+  Future<void> _toggleGPSTracking() async {
+    if (_trackingGPS) {
+      // Stop tracking
+      _positionStream?.cancel();
+      setState(() {
+        _trackingGPS = false;
+      });
+      NotificationService.showInfo(context, 'GPS tracking stopped');
+    } else {
+      // Start tracking
+      try {
+        // Check if location services are enabled
+        bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) {
+          NotificationService.showError(context, 'Location services are disabled');
+          return;
+        }
+
+        // Check location permission
+        LocationPermission permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.denied) {
+          permission = await Geolocator.requestPermission();
+          if (permission == LocationPermission.denied) {
+            NotificationService.showError(context, 'Location permission denied');
+            return;
+          }
+        }
+
+        if (permission == LocationPermission.deniedForever) {
+          NotificationService.showError(context, 'Location permissions are permanently denied');
+          return;
+        }
+
+        setState(() {
+          _trackingGPS = true;
+        });
+
+        // Start position stream
+        _positionStream = Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,  // Update every 10 meters
+          ),
+        ).listen((Position position) {
+          setState(() {
+            _currentPosition = position;
+          });
+          // Move map to follow user
+          _mapController.move(
+            LatLng(position.latitude, position.longitude),
+            18.0,  // Zoom in close for tracking
+          );
+        });
+
+        NotificationService.showSuccess(context, 'GPS tracking started');
+      } catch (e) {
+        setState(() {
+          _trackingGPS = false;
+        });
+        NotificationService.showError(context, 'Failed to start GPS tracking: $e');
+      }
+    }
+  }
+
+  // Add tree at current GPS location
+  Future<void> _addTreeAtGPSLocation() async {
+    try {
+      setState(() => _locating = true);
+      
+      // Check if location services are enabled
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        NotificationService.showError(context, 'Location services are disabled');
+        setState(() => _locating = false);
+        return;
+      }
+
+      // Check location permission
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          NotificationService.showError(context, 'Location permission denied');
+          setState(() => _locating = false);
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        NotificationService.showError(context, 'Location permissions are permanently denied');
+        setState(() => _locating = false);
+        return;
+      }
+
+      // Get current position
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
+      );
+
+      setState(() => _locating = false);
+
+      // Add tree at GPS location
+      _addTreeAtLocation(LatLng(position.latitude, position.longitude));
+      
+      NotificationService.showSuccess(
+        context, 
+        'Adding tree at GPS location: ${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}'
+      );
+    } catch (e) {
+      setState(() => _locating = false);
+      NotificationService.showError(context, 'Failed to get GPS location: $e');
     }
   }
 
@@ -1163,8 +1298,16 @@ class _MapPageState extends State<MapPage> {
         builder: (context) => TreeForm(
           siteId: widget.site.id,
           initialEntry: tree,
+          reportType: widget.site.reportType,
           onSubmit: (updatedTree) async {
-            await TreeStorageService.updateTree(updatedTree.id, updatedTree);
+            final box = Hive.box<TreeEntry>(TreeStorageService.boxName);
+            final key = box.keys.firstWhere(
+              (k) => box.get(k)?.id == tree.id,
+              orElse: () => null,
+            );
+            if (key != null) {
+              await TreeStorageService.updateTree(key, updatedTree);
+            }
             _loadTrees(); // Refresh map
             Navigator.pop(context);
           },
@@ -1218,6 +1361,7 @@ class _MapPageState extends State<MapPage> {
           child: TreeForm(
             siteId: widget.site.id,
             initialEntry: null, // This will trigger auto-numbering
+            reportType: widget.site.reportType,
             onSubmit: (entry) async {
               // Set the coordinates from the tap point
               final updatedEntry = TreeEntry(
@@ -1273,39 +1417,6 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  Future<void> _exportMapAsImage() async {
-    try {
-      final imagePath = await MapExportService.exportSiteMapAsPng(
-        widget.site,
-        showSRZ: _showSRZ,
-        showNRZ: _showNRZ,
-        showTreeNumbers: true,
-        satelliteView: false,
-      );
-      
-      if (imagePath != null) {
-        if (kIsWeb) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Map exported and downloaded!')),
-          );
-        } else {
-          await Share.shareXFiles([XFile(imagePath)], text: 'Map export from Arborist Assistant');
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Map exported as image!')),
-          );
-        }
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to export map - no trees found')),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to export map: $e')),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1318,11 +1429,6 @@ class _MapPageState extends State<MapPage> {
             icon: Icon(_satelliteView ? Icons.map : Icons.satellite),
             onPressed: () => _toggleSatelliteView(),
             tooltip: _satelliteView ? 'Switch to Map View' : 'Switch to Satellite View',
-          ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () => _addTreeFromMap(),
-            tooltip: 'Add Tree to Map',
           ),
           IconButton(
             icon: const Icon(Icons.filter_list),
@@ -1356,8 +1462,8 @@ class _MapPageState extends State<MapPage> {
                   key: ValueKey('map_$_mapRefreshCounter'),
                   mapController: _mapController,
                   options: MapOptions(
-                    center: _center,
-                    zoom: _zoom,
+                    initialCenter: _center,
+                    initialZoom: _zoom,
                     onMapReady: () {
                       setState(() {
                         _mapReady = true;
@@ -1433,12 +1539,137 @@ class _MapPageState extends State<MapPage> {
                     
                     // Scale indicator for true size reference
                     // ScaleLayerWidget removed - not available in current flutter_map version
+                    
+                    // Current GPS position marker
+                    if (_currentPosition != null)
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                            width: 30,
+                            height: 30,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withValues(alpha: 0.3),
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.blue, width: 3),
+                              ),
+                              child: const Icon(
+                                Icons.my_location,
+                                color: Colors.blue,
+                                size: 16,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
                   ),
                 ),
             ],
           ),
+          
+          // GPS Control Buttons (offset from floating action buttons)
+          Positioned(
+            left: 16,
+            bottom: 200,
+            child: Column(
+              children: [
+                // GPS Tracking Button
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: _toggleGPSTracking,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Icon(
+                          _trackingGPS ? Icons.gps_fixed : Icons.gps_not_fixed,
+                          color: _trackingGPS ? Colors.blue : Colors.grey[600],
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // Center on Current Location Button
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: _getCurrentLocation,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Icon(
+                          Icons.my_location,
+                          color: Colors.purple[600],
+                          size: 24,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // GPS Tracking Status Indicator - moved to top
+          if (_trackingGPS)
+            Positioned(
+              top: 60,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.blue,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.2),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    Icon(Icons.gps_fixed, color: Colors.white, size: 16),
+                    SizedBox(width: 4),
+                    Text(
+                      'GPS Tracking',
+                      style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           
           // Add tree mode indicator overlay
           if (_addTreeMode)
@@ -1473,9 +1704,17 @@ class _MapPageState extends State<MapPage> {
             ),
         ],
       ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
+      floatingActionButton: SafeArea(
+        top: false,
+        left: false,
+        right: false,
+        minimum: const EdgeInsets.only(bottom: 16, right: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+          // Removed redundant buttons - keeping only essential ones
           FloatingActionButton(
             heroTag: 'addTreeMode',
             onPressed: () => _toggleAddTreeMode(),
@@ -1484,16 +1723,21 @@ class _MapPageState extends State<MapPage> {
             child: Icon(_addTreeMode ? Icons.close : Icons.add_location),
             tooltip: _addTreeMode ? 'Exit Add Tree Mode' : 'Enter Add Tree Mode',
           ),
-          const SizedBox(height: 16),
-          FloatingActionButton(
-            heroTag: 'viewTreeMode',
-            onPressed: () => _toggleViewTreeMode(),
-            backgroundColor: _viewTreeMode ? Colors.orange : Colors.grey,
-            foregroundColor: Colors.white,
-            child: Icon(_viewTreeMode ? Icons.visibility_off : Icons.visibility),
-            tooltip: _viewTreeMode ? 'Exit View Tree Mode' : 'Enter View Tree Mode',
+          const SizedBox(height: 8),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FloatingActionButton.small(
+                heroTag: 'addTreeGPS',
+                onPressed: _locating ? null : _addTreeAtGPSLocation,
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+                child: const Icon(Icons.add_location_alt, size: 18),
+                tooltip: 'Add tree at current GPS location',
+              ),
+            ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
           if (_addTreeMode) ...[
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -1506,66 +1750,33 @@ class _MapPageState extends State<MapPage> {
                 style: TextStyle(color: Colors.white, fontSize: 12),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
           ],
-          if (_viewTreeMode) ...[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.orange,
-                borderRadius: BorderRadius.circular(20),
+          const SizedBox(height: 8),
+          // SRZ/TPZ toggle buttons
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FloatingActionButton.small(
+                heroTag: 'toggleSRZ',
+                onPressed: () => _toggleSRZ(),
+                backgroundColor: _showSRZ ? Colors.red : Colors.grey,
+                foregroundColor: Colors.white,
+                child: const Text('SRZ', style: TextStyle(fontSize: 10)),
+                tooltip: 'Toggle SRZ (Structural Root Zone)',
               ),
-              child: const Text(
-                'Click on map to view trees',
-                style: TextStyle(color: Colors.white, fontSize: 12),
+              const SizedBox(width: 8),
+              FloatingActionButton.small(
+                heroTag: 'toggleTPZ',
+                onPressed: () => _toggleNRZ(),
+                backgroundColor: _showNRZ ? Colors.green : Colors.grey,
+                foregroundColor: Colors.white,
+                child: const Text('TPZ', style: TextStyle(fontSize: 10)),
+                tooltip: 'Toggle TPZ (Tree Protection Zone)',
               ),
-            ),
-            const SizedBox(height: 16),
-          ],
-          FloatingActionButton(
-            heroTag: 'addTree',
-            onPressed: () => _addTreeFromMap(),
-            backgroundColor: Colors.blue,
-            foregroundColor: Colors.white,
-            child: const Icon(Icons.add),
-            tooltip: 'Add Tree Form',
+            ],
           ),
-          const SizedBox(height: 16),
-          FloatingActionButton(
-            heroTag: 'toggleSRZ',
-            onPressed: () => _toggleSRZ(),
-            backgroundColor: _showSRZ ? Colors.orange : Colors.grey,
-            foregroundColor: Colors.white,
-            child: const Icon(Icons.circle_outlined),
-            tooltip: 'Toggle SRZ Circles',
-          ),
-          const SizedBox(height: 16),
-          FloatingActionButton(
-            heroTag: 'toggleNRZ',
-            onPressed: () => _toggleNRZ(),
-            backgroundColor: _showNRZ ? Colors.green : Colors.grey,
-            foregroundColor: Colors.white,
-            child: const Icon(Icons.circle_outlined),
-            tooltip: 'Toggle NRZ Circles',
-          ),
-          const SizedBox(height: 16),
-          FloatingActionButton(
-            heroTag: 'centerMap',
-            onPressed: () => _centerMapOnSite(),
-            backgroundColor: Colors.purple,
-            foregroundColor: Colors.white,
-            child: const Icon(Icons.center_focus_strong),
-            tooltip: 'Center Map on Site',
-          ),
-          const SizedBox(height: 16),
-          FloatingActionButton(
-            heroTag: 'clearMap',
-            onPressed: () => _clearMap(),
-            backgroundColor: Colors.red,
-            foregroundColor: Colors.white,
-            child: const Icon(Icons.clear_all),
-            tooltip: 'Clear All Trees',
-          ),
+          const SizedBox(height: 8),
           if (_locating)
             Positioned(
               top: 90,
@@ -1591,10 +1802,51 @@ class _MapPageState extends State<MapPage> {
               ),
             ),
         ],
+        ),
       ),
     );
   }
 
+  Widget _buildLegendItem({
+    required IconData icon,
+    required Color color,
+    required String label,
+    required bool isOutline,
+  }) {
+    return Row(
+      children: [
+        Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(
+            color: isOutline ? Colors.transparent : color,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: color,
+              width: isOutline ? 2 : 0,
+            ),
+          ),
+          child: isOutline
+              ? null
+              : Icon(
+                  icon,
+                  size: 12,
+                  color: Colors.white,
+                ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+          ),
+        ),
+      ],
+    );
+  }
+  
+  // Export functions removed – exports now handled by dedicated export flows
+  
   Widget _buildSearchAndFilterBar() {
     return Padding(
       padding: const EdgeInsets.all(16.0),
@@ -1735,22 +1987,16 @@ class _MapPageState extends State<MapPage> {
 
   // Add missing methods
   void _addTreeFromMap() {
-    // Navigate to tree form
+    // Navigate to Report Type Selector
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => TreeForm(
-          siteId: widget.site.id,
-          initialEntry: null,
-          onSubmit: (tree) async {
-            await TreeStorageService.addTree(tree);
-            // Don't call _loadTrees() here - it will be called when the page is focused
-            Navigator.pop(context);
-            NotificationService.showSuccess(context, 'Tree added successfully!');
-          },
-        ),
+        builder: (context) => ReportTypeSelector(site: widget.site),
       ),
-    );
+    ).then((_) {
+      // Reload trees when returning
+      _loadTrees();
+    });
   }
 
   void _handleMapTap(TapPosition tapPosition, LatLng point) {
@@ -1829,6 +2075,7 @@ class _MapPageState extends State<MapPage> {
         builder: (context) => TreeForm(
           siteId: widget.site.id,
           initialEntry: preFilledTree,
+          reportType: widget.site.reportType,
           onSubmit: (tree) async {
             await TreeStorageService.addTree(tree);
             _loadTrees(); // Refresh the map

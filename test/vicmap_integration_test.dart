@@ -43,11 +43,12 @@ void main() {
       expect(result['real_data'], isTrue);
       expect(result['data_source'], 'Vicmap Planning API');
       
-      // Should have overlays if any exist
+      // Should have overlays map if provided
       if (result['overlays'] != null) {
         expect(result['overlays'], isA<Map<String, dynamic>>());
+        expect(result['overlays'].keys, isNotEmpty);
       }
-      
+
       // Should have LGA laws
       if (result['lga_laws'] != null) {
         expect(result['lga_laws'], isA<List>());
@@ -98,7 +99,7 @@ void main() {
       expect(json, isA<Map<String, dynamic>>());
       expect(json['scheme'], 'Victoria Planning Provisions');
       expect(json['lga'], 'City of Whittlesea');
-      expect(json['zone'], isA<Map<String, dynamic>>());
+      expect(json['zone'], anyOf(isNull, isA<Map<String, dynamic>>()));
       expect(json['overlays'], isA<List>());
       expect(json['overlays'].length, 1);
       

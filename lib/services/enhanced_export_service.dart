@@ -1,14 +1,16 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:html' as html;
+import '../utils/platform_download.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/site.dart';
 import '../models/tree_entry.dart';
+import '../models/report_type.dart';
 import '../services/tree_storage_service.dart';
 import '../services/map_export_service.dart';
+import '../services/report_generation_service.dart';
 import 'package:intl/intl.dart';
 
 class EnhancedExportService {
@@ -20,6 +22,51 @@ class EnhancedExportService {
     'Permit Application',
     'VTA Report',
   ];
+  
+  /// Map report type codes to export templates
+  static String getTemplateForReportType(String reportType) {
+    switch (reportType) {
+      case 'PAA': // Preliminary Assessment
+        return 'Tree Assessment Report';
+      case 'AIA': // Arboricultural Impact Assessment
+        return 'Site Survey Report';
+      case 'TRA': // Tree Risk Assessment
+        return 'Risk Assessment Report';
+      case 'TPMP': // Tree Protection Management Plan
+        return 'Management Plan';
+      case 'Removal': // Removal Application
+        return 'Permit Application';
+      case 'Witness': // Expert Witness Report
+        return 'VTA Report';
+      case 'Condition': // Condition Assessment
+        return 'Tree Assessment Report';
+      case 'PostDev': // Post-Development Monitoring
+        return 'Management Plan';
+      case 'Vegetation': // Vegetation Assessment
+        return 'Site Survey Report';
+      default:
+        return 'Tree Assessment Report';
+    }
+  }
+  
+  /// Export site using the correct template for its report type
+  static Future<void> exportSiteReport(Site site) async {
+    final trees = List<TreeEntry>.from(TreeStorageService.getTreesForSite(site.id));
+    if (trees.isEmpty) {
+      throw Exception('No trees found in site. Please add trees before generating a report.');
+    }
+    
+    print('🚀 exportSiteReport called for: ${site.name}');
+    print('📊 Report Type: ${site.reportType} (${site.reportTypeEnum.code})');
+    print('🌳 Trees count: ${trees.length}');
+    
+    // Use DOCX template generation
+    await ReportGenerationService.shareReport(
+      site: site,
+      trees: trees,
+      reportType: site.reportTypeEnum,
+    );
+  }
 
   static const List<String> _pdfTemplates = [
     'Site Map with Trees',
@@ -40,12 +87,26 @@ class EnhancedExportService {
         throw Exception('No trees found in site');
       }
 
+      try {
+        final reportType = _getReportTypeFromTemplate(template);
+        await ReportGenerationService.shareReport(
+          site: site,
+          trees: trees,
+          reportType: reportType,
+        );
+        return;
+      } catch (templateError) {
+        // Fall back to legacy text-based generation if template fails
+        print('Template generation failed, falling back to text: $templateError');
+      }
+
+      // Legacy fallback: generate plain text document
       String content = _generateWordContent(site, trees, template);
       
       if (kIsWeb) {
         // Web: trigger download
         final fileName = '${site.name.replaceAll(' ', '_')}_${template.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.doc';
-        _downloadTextAsFile(content, fileName);
+        await _downloadTextAsFile(content, fileName, mimeType: 'application/msword');
       } else {
         // Mobile/Desktop: save as .docx file
         try {
@@ -58,11 +119,31 @@ class EnhancedExportService {
         } catch (e) {
           // Fallback to web download if path_provider fails
           final fileName = '${site.name.replaceAll(' ', '_')}_${template.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.doc';
-          _downloadTextAsFile(content, fileName);
+          await _downloadTextAsFile(content, fileName, mimeType: 'application/msword');
         }
       }
     } catch (e) {
       throw Exception('Failed to export Word document: $e');
+    }
+  }
+
+  /// Map old template names to ReportType enum
+  static ReportType _getReportTypeFromTemplate(String template) {
+    switch (template) {
+      case 'Tree Assessment Report':
+        return ReportType.paa;
+      case 'Site Survey Report':
+        return ReportType.aia;
+      case 'Risk Assessment Report':
+        return ReportType.tra;
+      case 'Management Plan':
+        return ReportType.tpmp;
+      case 'Permit Application':
+        return ReportType.removal;
+      case 'VTA Report':
+        return ReportType.witness;
+      default:
+        return ReportType.paa;
     }
   }
 
@@ -78,7 +159,7 @@ class EnhancedExportService {
         // Web: trigger download
         final fileName = '${site.name.replaceAll(' ', '_')}_${template.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.pdf';
         final content = _generatePdfContent(site, trees, template);
-        _downloadTextAsFile(content, fileName);
+        await _downloadTextAsFile(content, fileName, mimeType: 'application/pdf');
       } else {
         // Mobile/Desktop: generate PDF
         try {
@@ -94,7 +175,7 @@ class EnhancedExportService {
           // Fallback to web download if path_provider fails
           final fileName = '${site.name.replaceAll(' ', '_')}_${template.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.pdf';
           final content = _generatePdfContent(site, trees, template);
-          _downloadTextAsFile(content, fileName);
+          await _downloadTextAsFile(content, fileName, mimeType: 'application/pdf');
         }
       }
     } catch (e) {
@@ -338,30 +419,10 @@ class EnhancedExportService {
     }
   }
 
-  /// Export comprehensive site report
+  /// Export comprehensive site report using DOCX templates
   static Future<void> exportComprehensiveReport(Site site) async {
-    try {
-      final trees = TreeStorageService.getTreesForSite(site.id);
-      if (trees.isEmpty) {
-        throw Exception('No trees found in site');
-      }
-
-      // Generate comprehensive report content
-      final reportContent = _generateComprehensiveReport(site, trees);
-      
-      if (kIsWeb) {
-        _showWebExportDialog('Comprehensive Report', reportContent);
-      } else {
-        final directory = await getTemporaryDirectory();
-        final fileName = '${site.name.replaceAll(' ', '_')}_Comprehensive_Report_${DateTime.now().millisecondsSinceEpoch}.txt';
-        final file = File('${directory.path}/$fileName');
-        await file.writeAsString(reportContent);
-        
-        await Share.shareXFiles([XFile(file.path)], text: 'Comprehensive Report: ${site.name}');
-      }
-    } catch (e) {
-      throw Exception('Failed to export comprehensive report: $e');
-    }
+    // Use DOCX template-based report generation
+    return exportSiteReport(site);
   }
 
   /// Generate comprehensive site report
@@ -455,15 +516,8 @@ class EnhancedExportService {
   }
 
   /// Download text content as a file in web browser
-  static void _downloadTextAsFile(String content, String fileName) {
-    if (kIsWeb) {
-      final bytes = utf8.encode(content);
-      final blob = html.Blob([bytes]);
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute('download', fileName)
-        ..click();
-      html.Url.revokeObjectUrl(url);
-    }
+  static Future<void> _downloadTextAsFile(String content, String fileName, {String mimeType = 'text/plain'}) async {
+    final bytes = Uint8List.fromList(utf8.encode(content));
+    await downloadFile(bytes, fileName, mimeType);
   }
 }

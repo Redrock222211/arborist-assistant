@@ -670,11 +670,15 @@ class _DashboardPageState extends State<DashboardPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Welcome back, ${currentUser?.name ?? 'Arborist'}!',
-                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green.shade800,
+                      Flexible(
+                        child: Text(
+                          'Welcome back, ${currentUser?.name ?? 'Arborist'}!',
+                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green.shade800,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
                         ),
                       ),
                       Text(
@@ -875,11 +879,15 @@ class _DashboardPageState extends State<DashboardPage> {
                               Text(
                                 site.name,
                                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
                               ),
                               const SizedBox(height: 4),
                               Text(
                                 site.address,
                                 style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 2,
                               ),
                               const SizedBox(height: 8),
                               // Status badges
